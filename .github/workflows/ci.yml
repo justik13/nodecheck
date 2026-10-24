@@ -1,0 +1,41 @@
+name: Lint & Validate
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: error
+
+      - name: Syntax Check (bash -n)
+        run: |
+          bash -n ipregion.sh
+
+  test-run:
+    name: Test Execution
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y curl jq bsdmainutils
+
+      - name: Test Help & Options
+        run: |
+          chmod +x ipregion.sh
+          ./ipregion.sh --help
+          ./ipregion.sh -j --group cdn
