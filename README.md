@@ -1,8 +1,8 @@
-# VPNCheck (RU Edition)
+# NodeCheck (RU Edition)
 
 Скрипт проверки VPS и VPN-нод под Рунет: сверка по 18 базам GeoIP, обход блокировок, доступность сервисов РФ и связность с 7 макрорегионами.
 
-[![CI](https://github.com/justik13/vpncheck/actions/workflows/ci.yml/badge.svg)](https://github.com/justik13/vpncheck/actions/workflows/ci.yml)
+[![CI](https://github.com/justik13/nodecheck/actions/workflows/ci.yml/badge.svg)](https://github.com/justik13/nodecheck/actions/workflows/ci.yml)
 [![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -13,17 +13,17 @@
 Запуск одной командой без предварительной установки (время работы ~30 секунд):
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh)
 ```
 
 Через `wget`:
 ```bash
-bash <(wget -qO- https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh)
+bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh)
 ```
 
 Без замера скорости через iPerf3 (только пинг):
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh) --no-iperf
+bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) --no-iperf
 ```
 
 ---
@@ -51,13 +51,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 * **Twitter / X:** доступность `x.com`.
 * **Нейросети:** OpenAI ChatGPT (с валидацией поддержки региона), Anthropic Claude, Google Gemini.
 * **Google и YouTube:** регион аккаунта (GlifSetupAndroid), детекция отсутствия рекламы, YouTube CDN (IATA-код аэропорта), YouTube Premium, YouTube Music.
+* **Мессенджеры и рабочие инструменты:** Signal (`chat.signal.org`), Notion (`notion.so`).
 * **Игры и стриминг:** Spotify Signup, Steam Store, PlayStation Network, Netflix, Rutracker, Reddit, Apple Services.
 
 ### 3. Доступность сервисов РФ
-* **Госуслуги:** `gosuslugi.ru`.
+* **Государственные порталы:** Госуслуги (`gosuslugi.ru`), ФНС (`nalog.gov.ru`), Мос.ру (`mos.ru`), РЖД (`ticket.rzd.ru`).
 * **Поисковики и медиа:** Яндекс (`ya.ru`, проверка на SmartCaptcha), ВКонтакте (`vk.com`), Кинопоиск (`kinopoisk.ru`).
-* **Банки:** СберБанк, Т-Банк, ВТБ (проверка доступности с поддержкой сертификатов Минцифры).
-* **Классифайды:** Авито (`avito.ru`, проверка на Qrator / капчу).
+* **Банки:** СберБанк, Т-Банк, ВТБ, Альфа-Банк (проверка доступности с поддержкой сертификатов Минцифры).
+* **Классифайды и маркетплейсы:** Авито (`avito.ru`, проверка на Qrator), Wildberries (`wildberries.ru`).
 
 ### 4. Связность по регионам РФ
 * Москва (Центр, MSK-IX / Hostkey)
@@ -82,7 +83,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 
 ```text
 ================================================================================
- 🇷🇺 VPNCheck (RU Edition) - VPN Node & Quality Auditor v3.1.0-ru
+ 🇷🇺 NodeCheck (RU Edition) - VPN Node & Quality Auditor v3.1.0-ru
 ================================================================================
  IPv4:             168.222.254.191
  Локация / ASN:    DE (Frankfurt am Main) — AS198550 (NODE HOST LIMITED)
@@ -142,17 +143,24 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
   PlayStation Network                   Yes
   Reddit                                Yes
   Apple Services                        DE
+  Signal                                Yes
+  Notion                                Yes
 
 3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
   Сервис                                Статус
   ------------------------------------  ------
   Госуслуги (gosuslugi.ru)              OK
+  ФНС (nalog.gov.ru)                    OK
+  Мос.ру (mos.ru)                       OK
+  РЖД (ticket.rzd.ru)                   OK
   Яндекс (ya.ru)                        OK
   ВКонтакте (vk.com)                    OK
   СберБанк (sberbank.ru)                OK
   Т-Банк (tbank.ru)                     OK
   ВТБ (vtb.ru)                          Blocked (403 Geoblock)
+  Альфа-Банк (alfabank.ru)              Blocked (403 Geoblock)
   Авито (avito.ru)                      Blocked (439 Qrator Captcha)
+  Wildberries (wildberries.ru)          Blocked (WAF 498)
   Кинопоиск (kinopoisk.ru)              OK
 
 4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)
@@ -173,10 +181,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
  ⚖️  Вердикт пригодности ноды для РФ аудитории
 ================================================================================
  • Оценка ноды: 8.5 / 10 (ХОРОШО ДЛЯ VPN)
-   - Зарубежные сервисы: Обход блокировок функционирует (17/18 сервисов доступно).
-   - Внимание: Зарубежный IP блокируется сервисами РФ: ВТБ (vtb.ru), Авито (avito.ru).
-   - Рекомендация: настройте Split-Tunneling (прямой маршрут без VPN для этих доменов).
-   - Связность: Москва 45.9 ms, СПб 59.9 ms, Поволжье 60.0 ms, Урал 66.4 ms, Сибирь 95.7 ms.
+   - Зарубежные сервисы: Обход блокировок функционирует (19/20 сервисов доступно).
+   - Внимание: Зарубежный IP блокируется сервисами РФ (4): ВТБ, Альфа-Банк, Авито, Wildberries.
+   - Рекомендация Split-Tunneling (bypass): vtb.ru, alfabank.ru, avito.ru, wildberries.ru
+   - Связность: Москва 27.6 ms, СПб 16.0 ms, Поволжье 35.9 ms, Урал 48.2 ms, Сибирь 72.9 ms.
    - Пропускная способность iPerf3: 740 Mbps.
 ================================================================================
 ```
@@ -203,7 +211,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 * **ОС:** Linux (тестировалось на Ubuntu 24.04 Noble Numbat).
 * **Стек:** чистый Bash без Python и Node.js.
 * **Утилиты:** `curl`, `jq`, `ping` (`iputils-ping`), `awk`, `column` (`bsdextrautils`), `iperf3`.
-* **Безопасность:** скрипт не меняет настройки системы, временные файлы хранятся в изолированном каталоге `/tmp/vpncheck.XXXXXX` и гарантированно удаляются по триггеру `trap EXIT INT TERM`.
+* **Безопасность:** скрипт не меняет настройки системы, временные файлы хранятся в изолированном каталоге `/tmp/nodecheck.XXXXXX` и гарантированно удаляются по триггеру `trap EXIT INT TERM`.
 * **Время выполнения:** ~25–35 секунд.
 
 ---

@@ -19,12 +19,13 @@ jobs:
 
       - name: Syntax Check (bash -n)
         run: |
+          bash -n nodecheck.sh
           bash -n vpncheck.sh
           bash -n ipregion.sh
 
       - name: Run ShellCheck
         run: |
-          shellcheck -S warning -e SC1091 vpncheck.sh ipregion.sh
+          shellcheck -S warning -e SC1091 nodecheck.sh vpncheck.sh ipregion.sh
 
   test-ubuntu24:
     name: Test Execution (Ubuntu 24.04)
@@ -40,7 +41,8 @@ jobs:
 
       - name: Test Help & CLI Options
         run: |
-          chmod +x vpncheck.sh ipregion.sh
+          chmod +x nodecheck.sh vpncheck.sh ipregion.sh
+          ./nodecheck.sh --help
           ./vpncheck.sh --help
           ./ipregion.sh --help
-          ./vpncheck.sh -j
+          ./nodecheck.sh -j
