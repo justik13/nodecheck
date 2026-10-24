@@ -987,9 +987,9 @@ iperf_speed_test() {
   if [[ ${#ports[@]} -eq 0 ]]; then ports=(5201); fi
 
   for p in "${ports[@]}"; do
-    # 1. Try --bidir first (duplex test in 2s)
+    # 1. Try --bidir first (duplex test in 2s, 2 streams)
     local res
-    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 --bidir -J 2>/dev/null || echo "")
+    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 -P 2 --bidir -J 2>/dev/null || echo "")
     if [[ -n "$res" ]] && jq -e '.end.sum_sent_bidir_reverse.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
       local tx_bps rx_bps dl ul
       tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
@@ -1003,7 +1003,7 @@ iperf_speed_test() {
     fi
 
     # 2. If --bidir not supported (e.g. Hostkey), test TX (Download into RU) then RX with -R (Upload from RU)
-    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 -J 2>/dev/null || echo "")
+    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 -P 2 -J 2>/dev/null || echo "")
     if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
       local tx_bps rx_bps dl="—" ul="—"
       tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
@@ -1011,7 +1011,7 @@ iperf_speed_test() {
         dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
 
         local res_rx
-        res_rx=$(timeout 3.5 iperf3 -c "$host" -p "$p" -R -t 2 -J 2>/dev/null || echo "")
+        res_rx=$(timeout 3.5 iperf3 -c "$host" -p "$p" -R -t 2 -P 2 -J 2>/dev/null || echo "")
         if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
           rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
           ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
@@ -1055,13 +1055,13 @@ measure_ru_connectivity() {
 
     if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
       if [[ "$JSON_OUTPUT" != "true" ]]; then
-        printf "    \033[1;33m⏳\033[0m %s: %s | замер iPerf3...\r" "$label" "$ping_val" >&2
+        printf "    \033[1;33m⏳\033[0m %s: %s | замер iPerf3...\r" "$label" "$ping_val"
       fi
       speed=$(iperf_speed_test "$host" "${ports[@]}")
     fi
 
     if [[ "$JSON_OUTPUT" != "true" ]]; then
-      printf "    \033[1;32m✓\033[0m %s: \033[1;97m%s\033[0m | \033[1;36m%s\033[0m\033[K\n" "$label" "$ping_val" "$speed" >&2
+      printf "\r\033[K    \033[1;32m✓\033[0m %s: \033[1;97m%s\033[0m | \033[1;36m%s\033[0m\n" "$label" "$ping_val" "$speed"
     fi
 
     ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
@@ -1442,7 +1442,7 @@ main() {
   check_doh
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 1/4:\033[0m Определение параметров ноды...\n" >&2
+    printf "\033[1;36m[*] Шаг 1/4:\033[0m Определение параметров ноды...\n"
   fi
   discover_external_ips
 
@@ -1454,22 +1454,22 @@ main() {
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     printf "    \033[1;32m✓\033[0m Нода: \033[1;97m%s\033[0m (%s) | %s | BBR: %s | Port 25: %s\n" \
-      "${EXTERNAL_IPV4:-$EXTERNAL_IPV6}" "${NODE_COUNTRY_CODE:-??}" "${NODE_ISP:-ISP}" "$NODE_BBR_STATUS" "$NODE_PORT25_STATUS" >&2
+      "${EXTERNAL_IPV4:-$EXTERNAL_IPV6}" "${NODE_COUNTRY_CODE:-??}" "${NODE_ISP:-ISP}" "$NODE_BBR_STATUS" "$NODE_PORT25_STATUS"
   fi
 
   # 1. 18 GeoIP Databases
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 2/4:\033[0m Опрос 18 GeoIP баз данных (параллельно)...\n" >&2
+    printf "\033[1;36m[*] Шаг 2/4:\033[0m Опрос 18 GeoIP баз данных (параллельно)...\n"
   fi
   run_geoip_consensus
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "    \033[1;32m✓\033[0m 18 GeoIP баз данных опрошены\n" >&2
+    printf "    \033[1;32m✓\033[0m 18 GeoIP баз данных опрошены\n"
   fi
 
   # 2. Western Services & RU Local Services
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 3/4:\033[0m Проверка 26 сервисов обхода цензуры и Рунета (параллельно)...\n" >&2
+    printf "\033[1;36m[*] Шаг 3/4:\033[0m Проверка 26 сервисов обхода цензуры и Рунета (параллельно)...\n"
   fi
   run_services_check
 
@@ -1479,12 +1479,12 @@ main() {
       IFS=$'\t' read -r _ val <<<"$row"
       if [[ "$val" != "No"* ]]; then unblock_ok=$((unblock_ok + 1)); fi
     done
-    printf "    \033[1;32m✓\033[0m Сервисы: \033[1;97m%d/18\033[0m зарубежных открыты | Рунет проверен\n" "$unblock_ok" >&2
+    printf "    \033[1;32m✓\033[0m Сервисы: \033[1;97m%d/18\033[0m зарубежных открыты | Рунет проверен\n" "$unblock_ok"
   fi
 
   # 3. Connectivity
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 4/4:\033[0m Замер связности и скорости по 7 регионам РФ (в реальном времени):\n" >&2
+    printf "\033[1;36m[*] Шаг 4/4:\033[0m Замер связности и скорости по 7 регионам РФ (в реальном времени):\n"
   fi
   measure_ru_connectivity
 
