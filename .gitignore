@@ -1,0 +1,9 @@
+# AI & local configuration rules
+GEMINI.md
+.gemini/
+
+# Temporary & debug files
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
