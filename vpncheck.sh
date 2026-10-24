@@ -56,6 +56,13 @@ RU_PING_NSK=""
 RU_PING_IRK=""
 RU_IPERF_SPEED=""
 
+VERDICT_SCORE="0.0"
+VERDICT_RATING=""
+VERDICT_COLOR=""
+VERDICT_UNBLOCK_OK=0
+VERDICT_UNBLOCK_TOTAL=0
+VERDICT_DEDUCTIONS=()
+
 YOUTUBE_AD_FREE=false
 YOUTUBE_DETECTED_CC=""
 
@@ -1170,6 +1177,8 @@ calculate_geoip_stats() {
 }
 
 print_results() {
+  calculate_verdict
+
   if [[ "$JSON_OUTPUT" == "true" ]]; then
     build_json
     printf "%s\n" "$RESULT_JSON"
@@ -1252,11 +1261,11 @@ print_results() {
   print_verdict
 }
 
-print_verdict() {
-  printf "\033[1;36m================================================================================\033[0m\n"
-  printf " ⚖️  \033[1;97mВердикт пригодности ноды для РФ аудитории\033[0m\n"
-  printf "\033[1;36m================================================================================\033[0m\n"
+calculate_verdict() {
+  local score=100
+  VERDICT_DEDUCTIONS=()
 
+  # 1. Western Unblock (Обход блокировок зарубежных сервисов)
   local unblock_ok=0 total_unblock=${#ARR_RU_UNBLOCK[@]}
   for row in "${ARR_RU_UNBLOCK[@]}"; do
     IFS=$'\t' read -r _ val <<<"$row"
@@ -1264,25 +1273,161 @@ print_verdict() {
       unblock_ok=$((unblock_ok + 1))
     fi
   done
+  VERDICT_UNBLOCK_OK="$unblock_ok"
+  VERDICT_UNBLOCK_TOTAL="$total_unblock"
+
+  local unblock_failed=$((total_unblock - unblock_ok))
+  # 1 service failed (commonly Cloudflare Turnstile anti-bot challenge on curl) is tolerated
+  if (( unblock_failed > 1 )); then
+    local pen=$(( (unblock_failed - 1) * 5 ))
+    score=$(( score - pen ))
+    VERDICT_DEDUCTIONS+=("Заблокировано $unblock_failed зарубежных сервисов (-$((pen / 10)).$((pen % 10)))")
+  fi
+
+  # 2. Reverse Geoblocking (Доступность сервисов и банков РФ)
+  local banks_blocked=()
+  local other_ru_blocked=()
+  local gos_blocked=false
+  local avito_blocked=false
+
+  for row in "${ARR_RU_LOCAL[@]}"; do
+    IFS=$'\t' read -r name val <<<"$row"
+    if [[ "$val" == *"Blocked"* || "$val" == *"Captcha"* || "$val" == *"No"* ]]; then
+      local clean_name="${name%% (*}"
+      case "$name" in
+        *"Сбер"*|*"Т-Банк"*|*"ВТБ"*)
+          banks_blocked+=("$clean_name")
+          ;;
+        *"Госуслуги"*)
+          gos_blocked=true
+          ;;
+        *"Авито"*)
+          avito_blocked=true
+          ;;
+        *)
+          other_ru_blocked+=("$clean_name")
+          ;;
+      esac
+    fi
+  done
+
+  if [[ ${#banks_blocked[@]} -gt 0 ]]; then
+    local pen=$(( ${#banks_blocked[@]} * 5 ))
+    score=$(( score - pen ))
+    local b_str
+    b_str=$(printf ", %s" "${banks_blocked[@]}")
+    b_str="${b_str:2}"
+    VERDICT_DEDUCTIONS+=("Гео-блокировка банков РФ ($b_str: -$((pen / 10)).$((pen % 10)))")
+  fi
+
+  if [[ "$gos_blocked" == "true" ]]; then
+    score=$(( score - 8 ))
+    VERDICT_DEDUCTIONS+=("Госуслуги заблокированы (-0.8)")
+  fi
+
+  if [[ "$avito_blocked" == "true" ]]; then
+    score=$(( score - 3 ))
+    VERDICT_DEDUCTIONS+=("Авито выдает капчу/фильтр (-0.3)")
+  fi
+
+  if [[ ${#other_ru_blocked[@]} -gt 0 ]]; then
+    local pen=$(( ${#other_ru_blocked[@]} * 2 ))
+    score=$(( score - pen ))
+    local o_str
+    o_str=$(printf ", %s" "${other_ru_blocked[@]}")
+    o_str="${o_str:2}"
+    VERDICT_DEDUCTIONS+=("Сервисы РФ заблокированы ($o_str: -$((pen / 10)).$((pen % 10)))")
+  fi
+
+  # 3. Latency to Russia (минимальный RTT до ключевых узлов: СПб / Москва)
+  local msk_val spb_val best_ping=999
+  msk_val=$(grep -oE '^[0-9]+' <<<"${RU_PING_MSK:-}" || true)
+  spb_val=$(grep -oE '^[0-9]+' <<<"${RU_PING_SPB:-}" || true)
+
+  if [[ -n "$msk_val" && "$msk_val" =~ ^[0-9]+$ ]] && (( msk_val < best_ping )); then best_ping="$msk_val"; fi
+  if [[ -n "$spb_val" && "$spb_val" =~ ^[0-9]+$ ]] && (( spb_val < best_ping )); then best_ping="$spb_val"; fi
+
+  if (( best_ping < 35 )); then
+    : # Premium sub-35ms routing (Finland, Baltic, direct peering)
+  elif (( best_ping <= 55 )); then
+    score=$(( score - 3 ))
+    VERDICT_DEDUCTIONS+=("Задержка до РФ ${best_ping} ms (-0.3)")
+  elif (( best_ping <= 90 )); then
+    score=$(( score - 6 ))
+    VERDICT_DEDUCTIONS+=("Повышенная задержка до РФ ${best_ping} ms (-0.6)")
+  elif (( best_ping < 999 )); then
+    score=$(( score - 12 ))
+    VERDICT_DEDUCTIONS+=("Высокая задержка до РФ ${best_ping} ms (-1.2)")
+  else
+    score=$(( score - 15 ))
+    VERDICT_DEDUCTIONS+=("Нет ответа ICMP пинга до РФ (-1.5)")
+  fi
+
+  # 4. Host stack & health
+  if [[ "$NODE_BBR_STATUS" != *"Active"* ]]; then
+    score=$(( score - 3 ))
+    VERDICT_DEDUCTIONS+=("TCP BBR не включен (-0.3)")
+  fi
+
+  if [[ "$NODE_UDP_STATUS" == *"Blocked"* ]]; then
+    score=$(( score - 15 ))
+    VERDICT_DEDUCTIONS+=("UDP заблокирован хостером (-1.5)")
+  fi
+
+  local risk_num="${NODE_RISK_SCORE:-0}"
+  if (( risk_num > 50 )); then
+    score=$(( score - 15 ))
+    VERDICT_DEDUCTIONS+=("Высокий Risk Score IP ($risk_num/100: -1.5)")
+  elif (( risk_num > 25 )); then
+    score=$(( score - 5 ))
+    VERDICT_DEDUCTIONS+=("Повышенный Risk Score IP ($risk_num/100: -0.5)")
+  fi
+
+  # Bonus: YouTube Ad-Free
+  if [[ "$YOUTUBE_AD_FREE" == "true" ]]; then
+    score=$(( score + 2 ))
+  fi
+
+  if (( score > 100 )); then score=100; fi
+  if (( score < 10 )); then score=10; fi
+
+  VERDICT_SCORE="$((score / 10)).$((score % 10))"
+
+  if (( score >= 90 )); then
+    VERDICT_RATING="ОТЛИЧНО ДЛЯ VPN"
+    VERDICT_COLOR="\033[1;32m"
+  elif (( score >= 75 )); then
+    VERDICT_RATING="ХОРОШО (ТРЕБУЕТСЯ SPLIT-TUNNELING ДЛЯ БАНКОВ)"
+    VERDICT_COLOR="\033[1;33m"
+  elif (( score >= 60 )); then
+    VERDICT_RATING="УДОВЛЕТВОРИТЕЛЬНО"
+    VERDICT_COLOR="\033[1;33m"
+  else
+    VERDICT_RATING="НЕ РЕКОМЕНДУЕТСЯ"
+    VERDICT_COLOR="\033[1;31m"
+  fi
+}
+
+print_verdict() {
+  printf "\033[1;36m================================================================================\033[0m\n"
+  printf " ⚖️  \033[1;97mВердикт пригодности ноды для РФ аудитории\033[0m\n"
+  printf "\033[1;36m================================================================================\033[0m\n"
+
+  printf " • %bОценка ноды: %s / 10 (%s)\033[0m\n" "$VERDICT_COLOR" "$VERDICT_SCORE" "$VERDICT_RATING"
+  printf "   - Зарубежные сервисы: Обход блокировок функционирует (%s/%s сервисов доступно).\n" \
+    "$VERDICT_UNBLOCK_OK" "$VERDICT_UNBLOCK_TOTAL"
+
+  if [[ "$YOUTUBE_AD_FREE" == "true" ]]; then
+    printf "   - \033[1;32mYouTube: Без рекламы 🎬 (Регион %s)\033[0m\n" "$YOUTUBE_DETECTED_CC"
+  fi
 
   local blocked_ru=()
   for row in "${ARR_RU_LOCAL[@]}"; do
     IFS=$'\t' read -r name val <<<"$row"
     if [[ "$val" == *"Blocked"* || "$val" == *"Captcha"* ]]; then
-      blocked_ru+=("$name")
+      blocked_ru+=("${name%% (*}")
     fi
   done
-
-  if (( unblock_ok >= total_unblock - 1 )) && [[ "$NODE_RISK_SCORE" -lt 30 ]]; then
-    printf " • \033[1;32mОценка ноды: 9.3 / 10 (ОТЛИЧНО ДЛЯ VPN)\033[0m\n"
-    printf "   - Зарубежные сервисы: Обход блокировок функционирует (%s/%s сервисов доступно).\n" "$unblock_ok" "$total_unblock"
-  else
-    printf " • \033[1;33mОценка ноды: 7.8 / 10 (ХОРОШО / С ОГРАНИЧЕНИЯМИ)\033[0m\n"
-  fi
-
-  if [[ "$YOUTUBE_AD_FREE" == "true" ]]; then
-    printf "   - \033[1;32mYouTube: Без рекламы 🎬 (Регион %s)\033[0m\n" "$YOUTUBE_DETECTED_CC"
-  fi
 
   if [[ ${#blocked_ru[@]} -gt 0 ]]; then
     local blocked_str
@@ -1291,13 +1436,25 @@ print_verdict() {
     printf "   - ⚠️ \033[1;33mВнимание:\033[0m Зарубежный IP блокируется сервисами РФ: %s.\n" "$blocked_str"
     printf "   - Рекомендация: настройте Split-Tunneling (прямой маршрут без VPN для этих доменов).\n"
   else
-    printf "   - Сервисы РФ открываются без ограничений.\n"
+    printf "   - \033[1;32mСервисы РФ:\033[0m Все банки и сервисы РФ открываются напрямую без ограничений.\n"
   fi
 
   printf "   - Связность: Москва %s, СПб %s, Поволжье %s, Урал %s, Сибирь %s.\n" \
     "$RU_PING_MSK" "$RU_PING_SPB" "$RU_PING_KZN" "$RU_PING_EKAT" "$RU_PING_NSK"
   if [[ -n "$RU_IPERF_SPEED" && "$RU_IPERF_SPEED" != "—" ]]; then
     printf "   - Пропускная способность iPerf3 (Москва): %s.\n" "$RU_IPERF_SPEED"
+  fi
+
+  if [[ ${#VERDICT_DEDUCTIONS[@]} -gt 0 ]]; then
+    local d_str
+    d_str=$(printf "; %s" "${VERDICT_DEDUCTIONS[@]}")
+    d_str="${d_str:2}"
+    printf "   - \033[0;90mШтрафы оценки: %s\033[0m\n" "$d_str"
+  fi
+
+  if [[ "$NODE_BBR_STATUS" != *"Active"* ]]; then
+    printf "   - 💡 \033[0;90mСовет: включите TCP BBR для ускорения канала при потерях пакетов:\033[0m\n"
+    printf "     \033[0;90mecho 'net.core.default_qdisc=fq' >> /etc/sysctl.conf && echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf && sysctl -p\033[0m\n"
   fi
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
@@ -1327,6 +1484,11 @@ build_json() {
     conn_json=$(jq --arg k "$name" --arg p "$ping_val" --arg s "$speed_val" '.[$k] = {latency: $p, speed: $s}' <<<"$conn_json")
   done
 
+  local deductions_json="[]"
+  if [[ ${#VERDICT_DEDUCTIONS[@]} -gt 0 ]]; then
+    deductions_json=$(jq -c -n '$ARGS.positional' --args "${VERDICT_DEDUCTIONS[@]}")
+  fi
+
   RESULT_JSON=$(jq -n \
     --arg ip "${EXTERNAL_IPV4:-}" \
     --arg country "${NODE_COUNTRY_CODE:-}" \
@@ -1342,6 +1504,11 @@ build_json() {
     --arg zero_probe "${NODE_ZERO_PROBE:-}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
+    --arg verdict_score "$VERDICT_SCORE" \
+    --arg verdict_rating "$VERDICT_RATING" \
+    --arg verdict_ok "$VERDICT_UNBLOCK_OK" \
+    --arg verdict_total "$VERDICT_UNBLOCK_TOTAL" \
+    --argjson verdict_deductions "$deductions_json" \
     --argjson geoip "$geoip_json" \
     --argjson unblock "$unblock_json" \
     --argjson local "$local_json" \
@@ -1353,6 +1520,13 @@ build_json() {
       network: { bbr: $bbr, udp: $udp, port25: $port25 },
       security: { zero_probe: $zero_probe },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
+      verdict: {
+        score: ($verdict_score | tonumber),
+        rating: $verdict_rating,
+        unblock_available: ($verdict_ok | tonumber),
+        unblock_total: ($verdict_total | tonumber),
+        deductions: $verdict_deductions
+      },
       geoip_consensus: $geoip,
       ru_unblock: $unblock,
       ru_local_services: $local,
