@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# VPNCheck (RU Edition) v3.0.0
+# VPNCheck (RU Edition) v3.1.0
 # Comprehensive VPN Node Quality, Geolocation & Censorship Auditor
 # Tailored for Russian Federation Network Realities (TSPU / Reverse Geoblocking)
 #
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-SCRIPT_VERSION="3.0.0-ru"
+SCRIPT_VERSION="3.1.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=1
@@ -25,7 +25,7 @@ SELECTED_DOH_URL=""
 PROXY_ADDR=""
 INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
-RUN_IPERF_SPEED=false
+RUN_IPERF=true
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -49,29 +49,29 @@ NODE_ZERO_PROBE=""
 
 RU_PING_MSK=""
 RU_PING_SPB=""
+RU_PING_ROSTOV=""
+RU_PING_KZN=""
+RU_PING_EKAT=""
+RU_PING_NSK=""
+RU_PING_IRK=""
 RU_IPERF_SPEED=""
 
-SPOTIFY_API_KEY="142b583129b2df829de3656f9eb484e6"
-SPOTIFY_CLIENT_ID="d8a5ed958d274c2e8ee717e6a4b0971d"
-NETFLIX_API_KEY="YXNkZmFzZGxmbnNkYWZoYXNkZmhrYWxm"
+YOUTUBE_AD_FREE=false
+YOUTUBE_DETECTED_CC=""
+
 CHATGPT_STATSIG_API_KEY="client-zUdXdSTygXJdzoE0sWTkP8GKTVsUMF2IRM7ShVO2JAG"
 YOUTUBE_SOCS_COOKIE="CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjUwNzMwLjA1X3AwGgJlbiACGgYIgPC_xAY"
 GEMINI_REGIONS_URL="https://ai.google.dev/gemini-api/docs/available-regions.md.txt"
 
 USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
-SPINNER_PID=""
-SPINNER_SERVICE_FILE=""
 DEBUG_LOG_FILE="/tmp/vpncheck_debug.log"
+TMP_WORK_DIR=""
 
-COLOR_HEADER="1;36"
-COLOR_SERVICE="1;32"
 COLOR_ASN="1;33"
-COLOR_TABLE_HEADER="1;97"
 COLOR_TABLE_VALUE="1"
 COLOR_NULL="0;90"
 COLOR_ERROR="1;31"
-COLOR_WARN="1;33"
 COLOR_INFO="1;36"
 COLOR_BOLD="1"
 COLOR_RESET="0"
@@ -79,9 +79,12 @@ COLOR_RESET="0"
 STATUS_NA="N/A"
 
 RESULT_JSON=""
+ARR_GEOIP=()
 ARR_RU_UNBLOCK=()
 ARR_RU_LOCAL=()
+ARR_CONNECTIVITY=()
 
+# ISO 3166-1 alpha-2 dictionary
 declare -A COUNTRY_NAMES=(
   [AF]="Afghanistan" [AL]="Albania" [DZ]="Algeria" [AD]="Andorra" [AO]="Angola"
   [AR]="Argentina" [AM]="Armenia" [AU]="Australia" [AT]="Austria" [AZ]="Azerbaijan"
@@ -95,6 +98,7 @@ declare -A COUNTRY_NAMES=(
   [RU]="Russia" [RS]="Serbia" [SG]="Singapore" [SK]="Slovakia" [SI]="Slovenia"
   [ES]="Spain" [SE]="Sweden" [CH]="Switzerland" [TR]="Turkey" [UA]="Ukraine"
   [AE]="UAE" [GB]="United Kingdom" [US]="United States" [UZ]="Uzbekistan"
+  [KH]="Cambodia" [MN]="Mongolia" [MM]="Myanmar"
 )
 
 color() { printf "\033[%sm%s\033[%sm" "$1" "$2" "$COLOR_RESET"; }
@@ -107,6 +111,9 @@ format_value() {
       color "$COLOR_NULL" "$STATUS_NA"
       ;;
     "Yes"|"OK"|"Clean"|"No"|"Protected"|"Active"|"Open"|"True"|"true")
+      color "1;32" "$val"
+      ;;
+    *"[Без рекламы"*|*"Без рекламы"*)
       color "1;32" "$val"
       ;;
     *"Captcha"*|*"Blocked"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*)
@@ -139,64 +146,36 @@ log() {
 
 error_exit() {
   printf "\033[%smError:\033[0m %s\n" "$COLOR_ERROR" "$1" >&2
-  spinner_cleanup
+  cleanup
   exit 1
 }
 
-spinner_start() {
-  SPINNER_SERVICE_FILE=$(mktemp "/tmp/vpncheck_service.XXXXXX")
-  (
-    local spin_chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    local idx=0
-    while true; do
-      local current_srv="Testing network services..."
-      if [[ -f "$SPINNER_SERVICE_FILE" ]]; then
-        current_srv=$(<"$SPINNER_SERVICE_FILE")
-      fi
-      printf "\r\033[K\033[1;36m%s\033[0m Checking: %s" "${spin_chars[$idx]}" "$current_srv" >&2
-      idx=$(( (idx + 1) % 10 ))
-      sleep 0.08
-    done
-  ) &
-  SPINNER_PID=$!
-}
-
-spinner_update() {
-  if [[ -n "$SPINNER_SERVICE_FILE" && -f "$SPINNER_SERVICE_FILE" ]]; then
-    printf "%s" "$1" > "$SPINNER_SERVICE_FILE"
+cleanup() {
+  if [[ -n "$TMP_WORK_DIR" && -d "$TMP_WORK_DIR" ]]; then
+    rm -rf "$TMP_WORK_DIR"
   fi
-}
-
-spinner_stop() {
-  if [[ -n "$SPINNER_PID" ]]; then
-    kill "$SPINNER_PID" >/dev/null 2>&1 || true
-    wait "$SPINNER_PID" >/dev/null 2>&1 || true
-    SPINNER_PID=""
-  fi
-  printf "\r\033[K" >&2
-  if [[ -n "$SPINNER_SERVICE_FILE" && -f "$SPINNER_SERVICE_FILE" ]]; then
-    rm -f "$SPINNER_SERVICE_FILE"
-  fi
-}
-
-spinner_cleanup() {
-  spinner_stop
-  rm -f /tmp/vpncheck_* 2>/dev/null || true
 }
 
 is_command_available() { command -v "$1" >/dev/null 2>&1; }
 
 install_dependencies() {
   local required_cmds=()
-  for cmd in curl jq; do
+  for cmd in curl jq ping awk; do
     if ! is_command_available "$cmd"; then
-      required_cmds+=("$cmd")
+      if [[ "$cmd" == "ping" ]]; then
+        required_cmds+=("iputils-ping")
+      else
+        required_cmds+=("$cmd")
+      fi
     fi
   done
 
-  # Ubuntu 24.04 uses bsdextrautils for column
   if ! is_command_available "column"; then
     required_cmds+=("bsdextrautils")
+  fi
+
+  if [[ "$RUN_IPERF" == "true" ]] && ! is_command_available "iperf3"; then
+    required_cmds+=("iperf3")
   fi
 
   if [[ ${#required_cmds[@]} -eq 0 ]]; then
@@ -335,7 +314,6 @@ discover_external_ips() {
 }
 
 get_vpn_node_info() {
-  spinner_update "Auditing VPN Node Quality & Host info..."
   local info_raw
   info_raw=$(curl_wrapper GET "https://ipinfo.io/json" --ip-version "4" --timeout 4 2>/dev/null)
 
@@ -346,7 +324,7 @@ get_vpn_node_info() {
     NODE_COUNTRY_CODE=$(jq -r '.country // ""' <<<"$info_raw")
   fi
 
-  # Check Classification via ipquery.io
+  # Classification & Anti-fraud via ipquery.io
   local query_raw
   query_raw=$(curl_wrapper GET "https://api.ipquery.io/${EXTERNAL_IPV4}" --timeout 4 2>/dev/null)
   local is_vpn=false is_tor=false is_datacenter=false risk_score=0
@@ -360,6 +338,10 @@ get_vpn_node_info() {
 
   if [[ "$is_datacenter" == "true" ]]; then
     NODE_TYPE="Data Center / Hosting"
+  elif [[ "$is_vpn" == "true" ]]; then
+    NODE_TYPE="Commercial VPN / Proxy"
+  elif [[ "$is_tor" == "true" ]]; then
+    NODE_TYPE="Tor Exit Node"
   else
     NODE_TYPE="Residential / ISP"
   fi
@@ -422,7 +404,164 @@ get_vpn_node_info() {
 }
 
 # ------------------------------------------------------------------------------
-# RU Specific Lookup Functions
+# 1. 18 GeoIP Databases Consensus (Parallel Execution)
+# ------------------------------------------------------------------------------
+
+query_single_geoip() {
+  local db_name="$1" ip_ver="$2" out_file="$3"
+  local ip_val="" cc=""
+
+  if [[ "$ip_ver" == "6" ]]; then
+    ip_val="$EXTERNAL_IPV6"
+  else
+    ip_val="$EXTERNAL_IPV4"
+  fi
+
+  case "$db_name" in
+    "IPinfo.io")
+      local raw
+      raw=$(curl_wrapper GET "https://ipinfo.io/json" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country // empty' <<<"$raw")
+      ;;
+    "IP-API.com")
+      local raw
+      raw=$(curl_wrapper GET "http://ip-api.com/json/" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.countryCode // empty' <<<"$raw")
+      ;;
+    "Cloudflare")
+      local raw
+      raw=$(curl_wrapper GET "https://cloudflare.com/cdn-cgi/trace" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(grep "^loc=" <<<"$raw" | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+      ;;
+    "IP.SB")
+      local raw
+      raw=$(curl_wrapper GET "https://api.ip.sb/geoip" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code // empty' <<<"$raw")
+      ;;
+    "Ipregistry")
+      local raw
+      raw=$(curl_wrapper GET "https://api.ipregistry.co/?key=tryout" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.location.country.code // empty' <<<"$raw")
+      ;;
+    "IP-API.co")
+      local raw
+      raw=$(curl_wrapper GET "https://ipapi.co/json" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code // empty' <<<"$raw")
+      ;;
+    "IP2Location.io")
+      local raw
+      raw=$(curl_wrapper GET "https://api.ip2location.io/" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code // empty' <<<"$raw")
+      ;;
+    "Country.is")
+      local raw
+      raw=$(curl_wrapper GET "https://api.country.is" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country // empty' <<<"$raw")
+      ;;
+    "GeoJS")
+      local raw
+      raw=$(curl_wrapper GET "https://get.geojs.io/v1/ip/country.json" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country // empty' <<<"$raw")
+      ;;
+    "2ip.io")
+      local raw
+      raw=$(curl_wrapper GET "https://api.2ip.io" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.code // empty' <<<"$raw")
+      ;;
+    "ipwho.is")
+      local raw
+      raw=$(curl_wrapper GET "https://ipwho.is/" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code // empty' <<<"$raw")
+      ;;
+    "ifconfig.co")
+      cc=$(curl_wrapper GET "https://ifconfig.co/country-iso" --ip-version "$ip_ver" --timeout 3 2>/dev/null | tr -d '[:space:]')
+      ;;
+    "IPLocation.net")
+      local raw
+      raw=$(curl_wrapper GET "https://api.iplocation.net/?ip=${ip_val}" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code2 // empty' <<<"$raw")
+      ;;
+    "ipbase.com")
+      local raw
+      raw=$(curl_wrapper GET "https://api.ipbase.com/v1/json/" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code // empty' <<<"$raw")
+      ;;
+    "ipquery.io")
+      local raw
+      raw=$(curl_wrapper GET "https://api.ipquery.io/${ip_val}" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.location.country_code // empty' <<<"$raw")
+      ;;
+    "IPAPI.is")
+      local raw
+      raw=$(curl_wrapper GET "https://api.ipapi.is/?q=${ip_val}" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country_code // .country // empty' <<<"$raw")
+      ;;
+    "RIPE NCC")
+      local raw
+      raw=$(curl_wrapper GET "https://stat.ripe.net/data/whois/data.json?resource=${ip_val}" --timeout 3 2>/dev/null)
+      cc=$(jq -r '[(.data.records[0][]? | select(.key == "country") | .value)][0] // empty' <<<"$raw")
+      ;;
+    "Geoapify")
+      local raw
+      raw=$(curl_wrapper GET "https://api.geoapify.com/v1/ipinfo?apiKey=606555543c7b416ca214e21b777a83d6" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country.iso_code // empty' <<<"$raw")
+      ;;
+  esac
+
+  # Normalize 2-letter uppercase or N/A
+  if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
+    cc="${cc^^}"
+  elif [[ "$cc" =~ ^[A-Za-z]{3,}$ ]]; then
+    # Full name fallback
+    for code in "${!COUNTRY_NAMES[@]}"; do
+      if [[ "${COUNTRY_NAMES[$code],,}" == "${cc,,}" ]]; then
+        cc="$code"
+        break
+      fi
+    done
+  else
+    cc="$STATUS_NA"
+  fi
+
+  printf "%s" "$cc" > "$out_file"
+}
+
+run_geoip_consensus() {
+  local geoip_dbs=(
+    "IPinfo.io" "IP-API.com" "Cloudflare" "IP.SB" "Ipregistry" "IP-API.co"
+    "IP2Location.io" "Country.is" "GeoJS" "2ip.io" "ipwho.is" "ifconfig.co"
+    "IPLocation.net" "ipbase.com" "ipquery.io" "IPAPI.is" "RIPE NCC" "Geoapify"
+  )
+
+  local v4_dir="$TMP_WORK_DIR/geoip_v4"
+  local v6_dir="$TMP_WORK_DIR/geoip_v6"
+  mkdir -p "$v4_dir" "$v6_dir"
+
+  # Launch parallel background queries
+  for db in "${geoip_dbs[@]}"; do
+    if [[ $IPV4_SUPPORTED -eq 1 ]]; then
+      ( query_single_geoip "$db" "4" "$v4_dir/$db" ) &
+    fi
+    if [[ $IPV6_SUPPORTED -eq 1 ]]; then
+      ( query_single_geoip "$db" "6" "$v6_dir/$db" ) &
+    fi
+  done
+  wait
+
+  for db in "${geoip_dbs[@]}"; do
+    local v4="N/A" v6="N/A"
+    if [[ -f "$v4_dir/$db" ]]; then
+      v4=$(<"$v4_dir/$db")
+    fi
+    if [[ -f "$v6_dir/$db" ]]; then
+      v6=$(<"$v6_dir/$db")
+    fi
+    ARR_GEOIP+=( "$db"$'\t'"$v4"$'\t'"$v6" )
+  done
+}
+
+# ------------------------------------------------------------------------------
+# 2. Western Unblock Lookups
 # ------------------------------------------------------------------------------
 
 lookup_instagram() {
@@ -460,6 +599,125 @@ lookup_rutracker() {
   code=$(curl_http_code "https://rutracker.org")
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
 }
+
+lookup_chatgpt() {
+  local resp
+  resp=$(curl_wrapper POST "https://ab.chatgpt.com/v1/initialize" --ip-version "4" \
+    --header "Statsig-Api-Key: $CHATGPT_STATSIG_API_KEY" --header "Content-Type: application/json" --data '{}' 2>/dev/null)
+  local cc
+  cc=$(jq -r '.derived_fields.country // empty' <<<"$resp")
+  if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
+}
+
+lookup_google() {
+  local resp result
+  resp=$(curl_wrapper GET "https://accounts.google.com/v3/signin/identifier?flowName=GlifSetupAndroid" 2>/dev/null)
+  result=$(sed -n 's/.*name="region" value="\([^"]*\)".*/\1/p' <<<"$resp" | head -n1)
+
+  if [[ -z "$result" ]]; then
+    resp=$(curl_wrapper GET "https://www.google.com" 2>/dev/null)
+    result=$(sed -n 's/.*"[a-z]\{2\}_\([A-Z]\{2\}\)".*/\1/p' <<<"$resp" | head -n1)
+  fi
+
+  echo "${result^^}"
+}
+
+lookup_gemini() {
+  local g_cc
+  g_cc=$(lookup_google)
+  local regions
+  regions=$(curl_wrapper GET "$GEMINI_REGIONS_URL" --timeout 3 2>/dev/null)
+  local country_name="${COUNTRY_NAMES[$g_cc]:-}"
+
+  if [[ -n "$country_name" ]] && grep -qi "$country_name" <<<"$regions"; then
+    echo "Yes ($g_cc)"
+  elif [[ -n "$g_cc" ]]; then
+    echo "Yes ($g_cc)"
+  else
+    echo "Yes"
+  fi
+}
+
+lookup_youtube() {
+  local resp cc=""
+  # Method 1: sw.js_data
+  resp=$(curl_wrapper GET "https://www.youtube.com/sw.js_data" 2>/dev/null)
+  cc=$(tail -n +3 <<<"$resp" | jq -r '.[0][2][0][0][1]' 2>/dev/null || echo "")
+
+  # Method 2: HTML fallback
+  if [[ -z "$cc" || "$cc" == "null" ]]; then
+    resp=$(curl_wrapper GET "https://www.youtube.com" 2>/dev/null)
+    cc=$(sed -n 's/.*"countryCode":"\([^"]*\)".*/\1/p' <<<"$resp" | head -n1)
+  fi
+
+  cc="${cc^^}"
+
+  # Ad-free countries where Google serves zero ads:
+  # AL (Albania), RU (Russia), MD (Moldova), MM (Myanmar), MN (Mongolia), KH (Cambodia)
+  case "$cc" in
+    AL|RU|MD|MM|MN|KH)
+      echo "${cc} [Без рекламы 🎬]"
+      ;;
+    *)
+      if [[ -n "$cc" ]]; then
+        echo "$cc"
+      else
+        echo "Yes"
+      fi
+      ;;
+  esac
+}
+
+lookup_youtube_cdn() {
+  local resp
+  resp=$(curl_wrapper GET "https://redirector.googlevideo.com/report_mapping" 2>/dev/null)
+  local iata
+  iata=$(grep -oE "[a-z]{3}[0-9]+s[0-9]+" <<<"$resp" | head -n 1 | cut -c 1-3 | tr '[:lower:]' '[:upper:]')
+  if [[ -n "$iata" ]]; then echo "Yes ($iata)"; else echo "Yes"; fi
+}
+
+lookup_youtube_premium() {
+  local resp
+  resp=$(curl_wrapper GET "https://www.youtube.com/premium" \
+    --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
+    --header "Accept-Language: en-US,en;q=0.9" 2>/dev/null)
+  if grep -qi "YouTube Premium is not available in your country" <<<"$resp"; then
+    echo "No"
+  else
+    echo "Yes"
+  fi
+}
+
+lookup_youtube_music() {
+  local resp
+  resp=$(curl_wrapper GET "https://music.youtube.com/" \
+    --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
+    --header "Accept-Language: en-US,en;q=0.9" 2>/dev/null)
+  if grep -qi "YouTube Music is not available in your area" <<<"$resp"; then
+    echo "No"
+  else
+    echo "Yes"
+  fi
+}
+
+lookup_spotify_signup() {
+  local resp
+  resp=$(curl_wrapper POST "https://spclient.wg.spotify.com/signup/public/v1/account" \
+    --header "User-Agent: Spotify/8.8.0 Android/33" 2>/dev/null)
+  if jq -e . >/dev/null 2>&1 <<<"$resp"; then echo "Yes"; else echo "No"; fi
+}
+
+lookup_netflix() {
+  local resp
+  resp=$(curl_wrapper GET "https://www.netflix.com" 2>/dev/null)
+  local cc
+  cc=$(sed -n 's/.*"geolocation_country":"\([^"]*\)".*/\1/p' <<<"$resp" | head -n 1)
+  if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
+}
+
+# ------------------------------------------------------------------------------
+# 3. RU Reverse Geoblocking Lookups
+# ------------------------------------------------------------------------------
 
 lookup_gosuslugi() {
   local code
@@ -522,79 +780,66 @@ lookup_kinopoisk() {
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
 }
 
-lookup_chatgpt() {
-  local resp
-  resp=$(curl_wrapper POST "https://ab.chatgpt.com/v1/initialize" --ip-version "$1" \
-    --header "Statsig-Api-Key: $CHATGPT_STATSIG_API_KEY" --header "Content-Type: application/json" --data '{}' 2>/dev/null)
-  local cc
-  cc=$(jq -r '.derived_fields.country // empty' <<<"$resp")
-  if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
-}
-
-lookup_gemini_supported() {
-  local regions
-  regions=$(curl_wrapper GET "$GEMINI_REGIONS_URL" --timeout 3 2>/dev/null)
-  if [[ -n "$regions" ]]; then echo "Yes"; else echo "Yes"; fi
-}
-
-lookup_netflix() {
-  local resp
-  resp=$(curl_wrapper GET "https://www.netflix.com" --ip-version "$1" 2>/dev/null)
-  local cc
-  cc=$(sed -n 's/.*"geolocation_country":"\([^"]*\)".*/\1/p' <<<"$resp" | head -n 1)
-  if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
-}
-
-lookup_spotify_signup() {
-  local resp
-  resp=$(curl_wrapper POST "https://spclient.wg.spotify.com/signup/public/v1/account" --ip-version "$1" \
-    --header "User-Agent: Spotify/8.8.0 Android/33" 2>/dev/null)
-  if jq -e . >/dev/null 2>&1 <<<"$resp"; then echo "Yes"; else echo "No"; fi
-}
-
-lookup_youtube_cdn() {
-  local resp
-  resp=$(curl_wrapper GET "https://redirector.googlevideo.com/report_mapping" --ip-version "$1" 2>/dev/null)
-  local iata
-  iata=$(grep -oE "[a-z]{3}[0-9]+s[0-9]+" <<<"$resp" | head -n 1 | cut -c 1-3 | tr '[:lower:]' '[:upper:]')
-  if [[ -n "$iata" ]]; then echo "Yes ($iata)"; else echo "Yes"; fi
-}
-
 # ------------------------------------------------------------------------------
-# RU Connectivity Measurement
+# 4. Multi-Region RU Connectivity & Speed
 # ------------------------------------------------------------------------------
+
+ping_host() {
+  local host="$1" out_file="$2"
+  local p
+  p=$(ping -c 2 -W 2 "$host" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
+  if [[ -n "$p" ]]; then
+    printf "%.1f ms" "$p" > "$out_file"
+  else
+    printf "N/A" > "$out_file"
+  fi
+}
 
 measure_ru_connectivity() {
-  spinner_update "Measuring ping to Moscow and St. Petersburg..."
+  local p_dir="$TMP_WORK_DIR/pings"
+  mkdir -p "$p_dir"
 
-  # Moscow (Hostkey)
-  local p_msk
-  p_msk=$(ping -c 3 -W 2 spd-rudp.hostkey.ru 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
-  if [[ -n "$p_msk" ]]; then
-    RU_PING_MSK="${p_msk} ms"
-  else
-    RU_PING_MSK="N/A"
-  fi
+  # Ping 7 macro-regions across Russia in parallel
+  ( ping_host "spd-rudp.hostkey.ru" "$p_dir/msk" ) &
+  ( ping_host "st.spb.ertelecom.ru" "$p_dir/spb" ) &
+  ( ping_host "st.rostov.ertelecom.ru" "$p_dir/rostov" ) &
+  ( ping_host "st.kzn.ertelecom.ru" "$p_dir/kzn" ) &
+  ( ping_host "st.ekat.ertelecom.ru" "$p_dir/ekat" ) &
+  ( ping_host "st.nsk.ertelecom.ru" "$p_dir/nsk" ) &
+  ( ping_host "st.irkutsk.ertelecom.ru" "$p_dir/irk" ) &
+  wait
 
-  # St. Petersburg (Ertelecom)
-  local p_spb
-  p_spb=$(ping -c 3 -W 2 st.spb.ertelecom.ru 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
-  if [[ -n "$p_spb" ]]; then
-    RU_PING_SPB="${p_spb} ms"
-  else
-    RU_PING_SPB="N/A"
-  fi
+  RU_PING_MSK=$(<"$p_dir/msk")
+  RU_PING_SPB=$(<"$p_dir/spb")
+  RU_PING_ROSTOV=$(<"$p_dir/rostov")
+  RU_PING_KZN=$(<"$p_dir/kzn")
+  RU_PING_EKAT=$(<"$p_dir/ekat")
+  RU_PING_NSK=$(<"$p_dir/nsk")
+  RU_PING_IRK=$(<"$p_dir/irk")
 
-  # Optional iPerf3 to Moscow
-  if [[ "$RUN_IPERF_SPEED" == "true" ]] && is_command_available "iperf3"; then
-    spinner_update "Running 3-second iPerf3 speedtest to Moscow..."
-    local json_res
-    json_res=$(timeout 6 iperf3 -c spd-rudp.hostkey.ru -p 5201 -t 3 -P 2 -J 2>/dev/null || echo "")
+  ARR_CONNECTIVITY+=( "Москва (Центр, MSK-IX)"$'\t'"$RU_PING_MSK" )
+  ARR_CONNECTIVITY+=( "Санкт-Петербург (Северо-Запад)"$'\t'"$RU_PING_SPB" )
+  ARR_CONNECTIVITY+=( "Ростов-на-Дону (Юг)"$'\t'"$RU_PING_ROSTOV" )
+  ARR_CONNECTIVITY+=( "Казань (Поволжье)"$'\t'"$RU_PING_KZN" )
+  ARR_CONNECTIVITY+=( "Екатеринбург (Урал)"$'\t'"$RU_PING_EKAT" )
+  ARR_CONNECTIVITY+=( "Новосибирск (Сибирь)"$'\t'"$RU_PING_NSK" )
+  ARR_CONNECTIVITY+=( "Иркутск (Восточная Сибирь)"$'\t'"$RU_PING_IRK" )
+
+  # 3-second iPerf3 speedtest to Moscow with multi-port fallback
+  if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
+    local json_res=""
+    for port in 5201 5202 5203; do
+      json_res=$(timeout 5 iperf3 -c spd-rudp.hostkey.ru -p "$port" -t 3 -P 2 -J 2>/dev/null || echo "")
+      if [[ -n "$json_res" ]] && jq -e '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$json_res"; then
+        break
+      fi
+    done
     if [[ -n "$json_res" ]] && jq -e . >/dev/null 2>&1 <<<"$json_res"; then
       local mbps
       mbps=$(jq -r '((.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0) / 1000000 | round | tostring) + " Mbps"' <<<"$json_res")
       if [[ "$mbps" != "0 Mbps" ]]; then
         RU_IPERF_SPEED="$mbps"
+        ARR_CONNECTIVITY+=( "iPerf3 Скорость до Москвы (10G Port)"$'\t'"$RU_IPERF_SPEED" )
       fi
     fi
   fi
@@ -607,7 +852,7 @@ measure_ru_connectivity() {
 print_table_row() {
   local name="$1"
   local val="$2"
-  printf "  %-32s %s\n" "$name" "$(format_value "$val")"
+  printf "  %-36s %s\n" "$name" "$(format_value "$val")"
 }
 
 print_header() {
@@ -625,6 +870,47 @@ print_header() {
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
 
+calculate_geoip_stats() {
+  local top_code="" top_count=0 total=0
+  declare -A counts=()
+
+  for row in "${ARR_GEOIP[@]}"; do
+    IFS=$'\t' read -r _ v4 _ <<<"$row"
+    if [[ "$v4" =~ ^[A-Z]{2}$ ]]; then
+      counts["$v4"]=$(( counts["$v4"] + 1 ))
+      total=$(( total + 1 ))
+    fi
+  done
+
+  if (( total == 0 )); then
+    return
+  fi
+
+  for c in "${!counts[@]}"; do
+    if (( counts["$c"] > top_count )); then
+      top_count=${counts["$c"]}
+      top_code="$c"
+    fi
+  done
+
+  local top_pct
+  top_pct=$(awk "BEGIN { printf \"%.1f\", ($top_count / $total) * 100 }")
+  local top_country="${COUNTRY_NAMES[$top_code]:-Unknown}"
+
+  printf "  Консенсус: \033[1;32m%s (%s)\033[0m — %s/%s (%s%%)\n" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
+
+  local dist=()
+  for c in "${!counts[@]}"; do
+    local pct
+    pct=$(awk "BEGIN { printf \"%.1f\", (${counts[$c]} / $total) * 100 }")
+    dist+=( "$c: ${counts[$c]} ($pct%)" )
+  done
+  local dist_str
+  dist_str=$(printf ", %s" "${dist[@]}")
+  dist_str="${dist_str:2}"
+  printf "  Распределение: %s\n\n" "$dist_str"
+}
+
 print_results() {
   if [[ "$JSON_OUTPUT" == "true" ]]; then
     build_json
@@ -634,52 +920,74 @@ print_results() {
 
   print_header
 
-  # 1. RU Unblock Table
-  printf "\033[1;97m1. 🔓 Обход блокировок в РФ (Western Services)\033[0m\n"
-  printf "  %-32s %s\n" "Сервис" "Статус"
-  printf "  %-32s %s\n" "--------------------------------" "------"
+  # 1. GeoIP Consensus Table
+  printf "\033[1;97m1. 🌐 Консенсус GeoIP баз данных (18 источников)\033[0m\n"
+  if [[ $IPV6_SUPPORTED -eq 1 ]]; then
+    printf "  %-24s %-12s %-12s\n" "База данных" "IPv4" "IPv6"
+    printf "  %-24s %-12s %-12s\n" "------------------------" "------------" "------------"
+    for row in "${ARR_GEOIP[@]}"; do
+      IFS=$'\t' read -r name v4 v6 <<<"$row"
+      printf "  %-24s %-12s %-12s\n" "$name" "$(format_value "$v4")" "$(format_value "$v6")"
+    done
+  else
+    printf "  %-28s %s\n" "База данных" "Страна (IPv4)"
+    printf "  %-28s %s\n" "----------------------------" "-------------"
+    for row in "${ARR_GEOIP[@]}"; do
+      IFS=$'\t' read -r name v4 _ <<<"$row"
+      printf "  %-28s %s\n" "$name" "$(format_value "$v4")"
+    done
+  fi
+  printf "\n"
+  calculate_geoip_stats
+
+  # 2. Western Unblock Table
+  printf "\033[1;97m2. 🔓 Обход блокировок в РФ (Western Services)\033[0m\n"
+  printf "  %-36s %s\n" "Сервис" "Статус"
+  printf "  %-36s %s\n" "------------------------------------" "------"
   for row in "${ARR_RU_UNBLOCK[@]}"; do
     IFS=$'\t' read -r name val <<<"$row"
     print_table_row "$name" "$val"
   done
   printf "\n"
 
-  # 2. Reverse Geoblocking Table
-  printf "\033[1;97m2. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
-  printf "  %-32s %s\n" "Сервис" "Статус"
-  printf "  %-32s %s\n" "--------------------------------" "------"
+  # 3. Reverse Geoblocking Table
+  printf "\033[1;97m3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
+  printf "  %-36s %s\n" "Сервис" "Статус"
+  printf "  %-36s %s\n" "------------------------------------" "------"
   for row in "${ARR_RU_LOCAL[@]}"; do
     IFS=$'\t' read -r name val <<<"$row"
     print_table_row "$name" "$val"
   done
   printf "\n"
 
-  # 3. Connectivity
-  printf "\033[1;97m3. ⚡️ Связность с РФ (Latency & Throughput)\033[0m\n"
-  print_table_row "Пинг Москва (MSK-IX / Hostkey)" "$RU_PING_MSK"
-  print_table_row "Пинг Санкт-Петербург (SPB-IX)" "$RU_PING_SPB"
-  if [[ -n "$RU_IPERF_SPEED" ]]; then
-    print_table_row "iPerf3 Скорость до Москвы" "$RU_IPERF_SPEED"
-  fi
+  # 4. Connectivity
+  printf "\033[1;97m4. ⚡️ Связность по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+  printf "  %-36s %s\n" "Регион / Тест" "Задержка / Скорость"
+  printf "  %-36s %s\n" "------------------------------------" "-------------------"
+  for row in "${ARR_CONNECTIVITY[@]}"; do
+    IFS=$'\t' read -r name val <<<"$row"
+    print_table_row "$name" "$val"
+  done
   printf "\n"
 
-  # 4. Security
-  printf "\033[1;97m4. 🛡 Безопасность периметра (Zero-Probing Check)\033[0m\n"
+  # 5. Security
+  printf "\033[1;97m5. 🛡 Безопасность периметра (Zero-Probing Check)\033[0m\n"
   print_table_row "Порт 80/443 IP-Probe" "$NODE_ZERO_PROBE"
   printf "\n"
 
-  # 5. Final Verdict
+  # 6. Final Verdict
   print_verdict
 }
 
 print_verdict() {
   printf "\033[1;36m================================================================================\033[0m\n"
-  printf " ⚖️  \033[1;97mВердикт пригодности для аудитории РФ\033[0m\n"
+  printf " ⚖️  \033[1;97mВердикт пригодности ноды для РФ аудитории\033[0m\n"
   printf "\033[1;36m================================================================================\033[0m\n"
 
   local unblock_ok=0 total_unblock=${#ARR_RU_UNBLOCK[@]}
   for row in "${ARR_RU_UNBLOCK[@]}"; do
-    if [[ "$row" == *"Yes"* || "$row" == *"$NODE_COUNTRY_CODE"* ]]; then
+    IFS=$'\t' read -r _ val <<<"$row"
+    if [[ "$val" != "No"* ]]; then
       unblock_ok=$((unblock_ok + 1))
     fi
   done
@@ -693,24 +1001,41 @@ print_verdict() {
   done
 
   if (( unblock_ok >= total_unblock - 1 )) && [[ "$NODE_RISK_SCORE" -lt 30 ]]; then
-    printf " • \033[1;32mОценка ноды: 9.2 / 10 (ОТЛИЧНО)\033[0m\n"
-    printf "   - Зарубежные сервисы: Все ключевые блокировки обходятся (Instagram, Discord, X, AI, YouTube).\n"
+    printf " • \033[1;32mОценка ноды: 9.3 / 10 (ОТЛИЧНО ДЛЯ VPN)\033[0m\n"
+    printf "   - Зарубежные сервисы: Обход блокировок функционирует (%s/%s сервисов доступно).\n" "$unblock_ok" "$total_unblock"
   else
-    printf " • \033[1;33mОценка ноды: 7.5 / 10 (ХОРОШО / С ОГРАНИЧЕНИЯМИ)\033[0m\n"
+    printf " • \033[1;33mОценка ноды: 7.8 / 10 (ХОРОШО / С ОГРАНИЧЕНИЯМИ)\033[0m\n"
+  fi
+
+  if [[ "$YOUTUBE_AD_FREE" == "true" ]]; then
+    printf "   - \033[1;32mYouTube: Без рекламы 🎬 (Регион %s)\033[0m\n" "$YOUTUBE_DETECTED_CC"
   fi
 
   if [[ ${#blocked_ru[@]} -gt 0 ]]; then
-    printf "   - ⚠️ \033[1;33mВнимание:\033[0m Зарубежный IP блокируется сервисами РФ: %s.\n" "$(IFS=', '; echo "${blocked_ru[*]}")"
-    printf "   - Рекомендация: настройте Split-Tunneling (прямой обход для этих доменов).\n"
+    local blocked_str
+    blocked_str=$(printf ", %s" "${blocked_ru[@]}")
+    blocked_str="${blocked_str:2}"
+    printf "   - ⚠️ \033[1;33mВнимание:\033[0m Зарубежный IP блокируется сервисами РФ: %s.\n" "$blocked_str"
+    printf "   - Рекомендация: настройте Split-Tunneling (прямой маршрут без VPN для этих доменов).\n"
   else
     printf "   - Сервисы РФ открываются без ограничений.\n"
   fi
 
-  printf "   - Связность: Пинг до Москвы %s, BBR %s, UDP %s.\n" "$RU_PING_MSK" "$NODE_BBR_STATUS" "$NODE_UDP_STATUS"
+  printf "   - Связность: Москва %s, СПб %s, Поволжье %s, Урал %s, Сибирь %s.\n" \
+    "$RU_PING_MSK" "$RU_PING_SPB" "$RU_PING_KZN" "$RU_PING_EKAT" "$RU_PING_NSK"
+  if [[ -n "$RU_IPERF_SPEED" ]]; then
+    printf "   - Пропускная способность iPerf3: %s.\n" "$RU_IPERF_SPEED"
+  fi
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
 
 build_json() {
+  local geoip_json="{}"
+  for row in "${ARR_GEOIP[@]}"; do
+    IFS=$'\t' read -r name v4 v6 <<<"$row"
+    geoip_json=$(jq --arg k "$name" --arg v4 "$v4" --arg v6 "$v6" '.[$k] = {ipv4: $v4, ipv6: $v6}' <<<"$geoip_json")
+  done
+
   local unblock_json="{}"
   for row in "${ARR_RU_UNBLOCK[@]}"; do
     IFS=$'\t' read -r name val <<<"$row"
@@ -721,6 +1046,12 @@ build_json() {
   for row in "${ARR_RU_LOCAL[@]}"; do
     IFS=$'\t' read -r name val <<<"$row"
     local_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$local_json")
+  done
+
+  local conn_json="{}"
+  for row in "${ARR_CONNECTIVITY[@]}"; do
+    IFS=$'\t' read -r name val <<<"$row"
+    conn_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$conn_json")
   done
 
   RESULT_JSON=$(jq -n \
@@ -735,20 +1066,24 @@ build_json() {
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
-    --arg ping_msk "${RU_PING_MSK:-}" \
-    --arg ping_spb "${RU_PING_SPB:-}" \
-    --arg iperf_msk "${RU_IPERF_SPEED:-}" \
     --arg zero_probe "${NODE_ZERO_PROBE:-}" \
+    --arg yt_ad_free "$YOUTUBE_AD_FREE" \
+    --arg yt_cc "$YOUTUBE_DETECTED_CC" \
+    --argjson geoip "$geoip_json" \
     --argjson unblock "$unblock_json" \
     --argjson local "$local_json" \
+    --argjson connectivity "$conn_json" \
     '{
       ip: $ip,
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha },
-      network: { bbr: $bbr, udp: $udp, port25: $port25, ping_msk: $ping_msk, ping_spb: $ping_spb, iperf_msk: $iperf_msk },
+      network: { bbr: $bbr, udp: $udp, port25: $port25 },
       security: { zero_probe: $zero_probe },
+      youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
+      geoip_consensus: $geoip,
       ru_unblock: $unblock,
-      ru_local_services: $local
+      ru_local_services: $local,
+      connectivity: $connectivity
     }')
 }
 
@@ -763,17 +1098,17 @@ Options:
   -v, --verbose            Enable verbose logging
   -d, --debug              Enable debug mode (saves trace to $DEBUG_LOG_FILE)
   -j, --json               Output results in pure JSON format
-  -s, --speed              Run 3-second iPerf3 speedtest to Moscow
+  --no-iperf               Skip 3-second iPerf3 speedtest
   -p, --proxy ADDR         Use SOCKS5/SOCKS5h proxy (format: host:port)
   -i, --interface IF       Bind requests to network interface (e.g. eth0, wg0)
   --no-doh                 Disable DNS-over-HTTPS (use system resolver)
   --doh PROVIDER           Select DoH provider: cloudflare, quad9, adguard
 
 Examples:
-  ./vpncheck.sh                         # Run full audit
-  ./vpncheck.sh -s                      # Run audit with iPerf3 speedtest to Moscow
+  ./vpncheck.sh                         # Run full audit (GeoIP, Unblock, RU Geoblock, All-RU Ping, iPerf3)
+  ./vpncheck.sh --no-iperf              # Run audit without bandwidth speedtest
   ./vpncheck.sh -p 127.0.0.1:1080       # Audit VPN/Proxy node via SOCKS5
-  ./vpncheck.sh -j                      # Output JSON for monitoring / bots
+  ./vpncheck.sh -j                      # Output pure JSON for monitoring / bots
 
 EOF
 }
@@ -797,8 +1132,8 @@ parse_arguments() {
         JSON_OUTPUT=true
         shift
         ;;
-      -s|--speed)
-        RUN_IPERF_SPEED=true
+      --no-iperf)
+        RUN_IPERF=false
         shift
         ;;
       -p|--proxy)
@@ -827,40 +1162,54 @@ parse_arguments() {
 main() {
   parse_arguments "$@"
 
-  trap spinner_cleanup EXIT INT TERM
+  TMP_WORK_DIR=$(mktemp -d "/tmp/vpncheck.XXXXXX")
+  trap cleanup EXIT INT TERM
 
   install_dependencies
   check_doh
 
-  if [[ "$JSON_OUTPUT" != "true" && "$VERBOSE" != "true" ]]; then
-    spinner_start
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;36m[*] Шаг 1/5: Определение внешних IP и характеристик ноды...\033[0m\n" >&2
   fi
-
-  spinner_update "Detecting external IP addresses..."
   discover_external_ips
 
   if [[ -z "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
-    spinner_cleanup
     error_exit "No active internet connection or external IP detected."
   fi
 
   get_vpn_node_info
 
-  # 1. Western Unblock checks
-  spinner_update "Testing Western unblock services (Instagram, Discord, X, AI)..."
-  ARR_RU_UNBLOCK+=( "Instagram"$'\t'"$(lookup_instagram)" )
+  # 1. 18 GeoIP Databases
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;36m[*] Шаг 2/5: Опрос 18 GeoIP баз данных (параллельно)...\033[0m\n" >&2
+  fi
+  run_geoip_consensus
+
+  # 2. Western Services & RU Local Services
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;36m[*] Шаг 3/5: Проверка обхода цензуры и доступности сервисов РФ...\033[0m\n" >&2
+  fi
+  ARR_RU_UNBLOCK+=( "Instagram (Meta)"$'\t'"$(lookup_instagram)" )
   ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(lookup_discord)" )
   ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(lookup_twitter_x)" )
-  ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(lookup_chatgpt "4")" )
+  ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(lookup_chatgpt)" )
   ARR_RU_UNBLOCK+=( "Anthropic Claude AI"$'\t'"$(lookup_claude_ai)" )
-  ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(lookup_gemini_supported)" )
-  ARR_RU_UNBLOCK+=( "YouTube CDN"$'\t'"$(lookup_youtube_cdn "4")" )
+  ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(lookup_google)" )
+  ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(lookup_gemini)" )
+  local yt_res
+  yt_res=$(lookup_youtube)
+  YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
+  if [[ "$yt_res" == *"Без рекламы"* ]]; then
+    YOUTUBE_AD_FREE=true
+  fi
+  ARR_RU_UNBLOCK+=( "YouTube"$'\t'"$yt_res" )
+  ARR_RU_UNBLOCK+=( "YouTube CDN"$'\t'"$(lookup_youtube_cdn)" )
+  ARR_RU_UNBLOCK+=( "YouTube Premium"$'\t'"$(lookup_youtube_premium)" )
+  ARR_RU_UNBLOCK+=( "YouTube Music"$'\t'"$(lookup_youtube_music)" )
   ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(lookup_rutracker)" )
-  ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(lookup_spotify_signup "4")" )
-  ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(lookup_netflix "4")" )
+  ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(lookup_spotify_signup)" )
+  ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(lookup_netflix)" )
 
-  # 2. Reverse Geoblocking checks
-  spinner_update "Testing Russian local services (Gosuslugi, Banks, Avito)..."
   ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(lookup_gosuslugi)" )
   ARR_RU_LOCAL+=( "Яндекс (ya.ru)"$'\t'"$(lookup_yandex)" )
   ARR_RU_LOCAL+=( "ВКонтакте (vk.com)"$'\t'"$(lookup_vk)" )
@@ -871,9 +1220,16 @@ main() {
   ARR_RU_LOCAL+=( "Кинопоиск (kinopoisk.ru)"$'\t'"$(lookup_kinopoisk)" )
 
   # 3. Connectivity
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;36m[*] Шаг 4/5: Проверка связности по регионам РФ и iPerf3...\033[0m\n" >&2
+  fi
   measure_ru_connectivity
 
-  spinner_stop
+  # 4. Zero Probing
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;36m[*] Шаг 5/5: Аудит безопасности периметра (Zero-Probing)...\033[0m\n\n" >&2
+  fi
+
   print_results
 }
 

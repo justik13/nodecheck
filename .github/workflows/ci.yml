@@ -7,19 +7,26 @@ on:
     branches: [ main, master ]
 
 jobs:
-  shellcheck:
-    name: ShellCheck
-    runs-on: ubuntu-latest
+  lint:
+    name: ShellCheck & Syntax
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
 
       - name: Syntax Check (bash -n)
         run: |
           bash -n vpncheck.sh
           bash -n ipregion.sh
 
-  test-run:
+      - name: Run ShellCheck
+        run: |
+          shellcheck -S warning -e SC1091 vpncheck.sh ipregion.sh
+
+  test-ubuntu24:
     name: Test Execution (Ubuntu 24.04)
     runs-on: ubuntu-24.04
     steps:
@@ -28,8 +35,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl jq bsdextrautils iproute2
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl jq bsdextrautils iputils-ping iperf3
 
       - name: Test Help & CLI Options
         run: |
