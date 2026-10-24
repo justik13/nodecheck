@@ -185,7 +185,7 @@ is_command_available() { command -v "$1" >/dev/null 2>&1; }
 
 install_dependencies() {
   local required_cmds=()
-  for cmd in curl jq ping awk; do
+  for cmd in curl jq ping awk openssl; do
     if ! is_command_available "$cmd"; then
       if [[ "$cmd" == "ping" ]]; then
         if is_command_available "apk"; then
@@ -451,16 +451,16 @@ get_vpn_node_info() {
 
   # Path MTU Detection (PMTU to Russian hubs)
   if is_command_available ping; then
-    if ping -c 1 -M do -s 1472 -W 1 ya.ru >/dev/null 2>&1 || ping -c 1 -M do -s 1472 -W 1 77.88.55.242 >/dev/null 2>&1; then
+    if ping -c 1 -M "do" -s 1472 -W 1 ya.ru >/dev/null 2>&1 || ping -c 1 -M "do" -s 1472 -W 1 77.88.55.242 >/dev/null 2>&1; then
       NODE_PMTU="1500 (Standard Ethernet)"
       NODE_RECOMMENDED_MTU="1420 (WG) / 1360 (AWG)"
-    elif ping -c 1 -M do -s 1392 -W 1 ya.ru >/dev/null 2>&1; then
+    elif ping -c 1 -M "do" -s 1392 -W 1 ya.ru >/dev/null 2>&1; then
       NODE_PMTU="1420 (WireGuard)"
       NODE_RECOMMENDED_MTU="1360 (Clamped)"
-    elif ping -c 1 -M do -s 1332 -W 1 ya.ru >/dev/null 2>&1; then
+    elif ping -c 1 -M "do" -s 1332 -W 1 ya.ru >/dev/null 2>&1; then
       NODE_PMTU="1360 (PPPoE / Tunnel)"
       NODE_RECOMMENDED_MTU="1280 (Min)"
-    elif ping -c 1 -M do -s 1252 -W 1 ya.ru >/dev/null 2>&1; then
+    elif ping -c 1 -M "do" -s 1252 -W 1 ya.ru >/dev/null 2>&1; then
       NODE_PMTU="1280 (IPv6 Min / Mobile)"
       NODE_RECOMMENDED_MTU="1240"
     else
@@ -1455,12 +1455,21 @@ measure_whitelist_readiness() {
     fi
   fi
 
+  format_wl_code() {
+    local c="$1"
+    if [[ "$c" =~ ^(200|301|302)$ ]]; then
+      echo "OK (Доступен)"
+    else
+      echo "Blocked ($c)"
+    fi
+  }
+
   ARR_WHITELIST=()
   ARR_WHITELIST+=( "Роль ноды в топологии"$'\t'"$WL_NODE_ROLE" )
-  ARR_WHITELIST+=( "Мессенджер MAX (max.ru, Уровень 1)"$'\t'"$([[ "$res_max" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_max)")" )
-  ARR_WHITELIST+=( "Anycast Яндекс / CDN (yastatic.net, Уровень 2)"$'\t'"$([[ "$res_ya" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_ya)")" )
-  ARR_WHITELIST+=( "VK Cloud / ВКонтакте (vk.com, Уровень 2)"$'\t'"$([[ "$res_vk" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_vk)")" )
-  ARR_WHITELIST+=( "Портал Госуслуг (gosuslugi.ru, Уровень 2)"$'\t'"$([[ "$res_gu" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_gu)")" )
+  ARR_WHITELIST+=( "Мессенджер MAX (max.ru, Уровень 1)"$'\t'"$(format_wl_code "$res_max")" )
+  ARR_WHITELIST+=( "Anycast Яндекс / CDN (yastatic.net, Уровень 2)"$'\t'"$(format_wl_code "$res_ya")" )
+  ARR_WHITELIST+=( "VK Cloud / ВКонтакте (vk.com, Уровень 2)"$'\t'"$(format_wl_code "$res_vk")" )
+  ARR_WHITELIST+=( "Портал Госуслуг (gosuslugi.ru, Уровень 2)"$'\t'"$(format_wl_code "$res_gu")" )
   ARR_WHITELIST+=( "Задержка до Anycast РФ (RTT)"$'\t'"$WL_ANYCAST_RTT — $WL_CASCADE_STATUS" )
   ARR_WHITELIST+=( "Стек протоколов под Белые Списки"$'\t'"UDP мертв в WL ➔ VLESS XHTTP over TCP/TLS 443" )
   if [[ -n "$CUSTOM_CDN_ENDPOINT" ]]; then

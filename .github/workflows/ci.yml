@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq curl jq bsdextrautils iputils-ping iperf3
+          sudo apt-get install -y -qq curl jq bsdextrautils iputils-ping iperf3 openssl
 
       - name: Test Help & CLI Options
         run: |
