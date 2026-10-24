@@ -45,4 +45,4 @@ jobs:
           ./nodecheck.sh --help
           ./vpncheck.sh --help
           ./ipregion.sh --help
-          ./nodecheck.sh -j
+          ./nodecheck.sh -j --no-iperf

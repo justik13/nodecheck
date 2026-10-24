@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-SCRIPT_VERSION="3.1.0-ru"
+SCRIPT_VERSION="3.2.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -26,6 +26,9 @@ PROXY_ADDR=""
 INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
 RUN_IPERF=true
+RUN_FULL_IPERF=false
+CHECK_SNI=""
+CUSTOM_CDN_ENDPOINT=""
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -42,10 +45,22 @@ NODE_RISK_SCORE=0
 NODE_RISK_COLOR="NULL"
 NODE_CAPTCHA_STATUS=""
 NODE_CAPTCHA_COLOR="NULL"
+NODE_RKN_STATUS="Checking..."
+NODE_RKN_COLOR="NULL"
+NODE_PMTU="Unknown"
+NODE_RECOMMENDED_MTU="1360"
 NODE_BBR_STATUS=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
 NODE_ZERO_PROBE=""
+NODE_ZERO_PROBE_COLOR="NULL"
+NODE_SNI_STATUS=""
+NODE_SNI_COLOR="NULL"
+
+WL_NODE_ROLE=""
+WL_ANYCAST_RTT="N/A"
+WL_CASCADE_STATUS=""
+ARR_WHITELIST=()
 
 RU_PING_MSK=""
 RU_PING_SPB=""
@@ -434,25 +449,115 @@ get_vpn_node_info() {
     NODE_UDP_STATUS="Blocked"
   fi
 
-  # Local Port 80/443 Web Server / Fallback Probe
-  local p80 p443
+  # Path MTU Detection (PMTU to Russian hubs)
+  if is_command_available ping; then
+    if ping -c 1 -M do -s 1472 -W 1 ya.ru >/dev/null 2>&1 || ping -c 1 -M do -s 1472 -W 1 77.88.55.242 >/dev/null 2>&1; then
+      NODE_PMTU="1500 (Standard Ethernet)"
+      NODE_RECOMMENDED_MTU="1420 (WG) / 1360 (AWG)"
+    elif ping -c 1 -M do -s 1392 -W 1 ya.ru >/dev/null 2>&1; then
+      NODE_PMTU="1420 (WireGuard)"
+      NODE_RECOMMENDED_MTU="1360 (Clamped)"
+    elif ping -c 1 -M do -s 1332 -W 1 ya.ru >/dev/null 2>&1; then
+      NODE_PMTU="1360 (PPPoE / Tunnel)"
+      NODE_RECOMMENDED_MTU="1280 (Min)"
+    elif ping -c 1 -M do -s 1252 -W 1 ya.ru >/dev/null 2>&1; then
+      NODE_PMTU="1280 (IPv6 Min / Mobile)"
+      NODE_RECOMMENDED_MTU="1240"
+    else
+      NODE_PMTU="Non-standard / ICMP Drop"
+      NODE_RECOMMENDED_MTU="1360 (Safe default)"
+    fi
+  else
+    NODE_PMTU="N/A (ping not found)"
+    NODE_RECOMMENDED_MTU="1360"
+  fi
+
+  # RKN / Antifilter IP Registry Check
+  if [[ -n "$EXTERNAL_IPV4" ]]; then
+    local rkn_hit=false
+    local rkn_list
+    rkn_list=$(curl -sL --connect-timeout 2 --max-time 3 "https://antifilter.download/list/ip.lst" 2>/dev/null || echo "")
+    if [[ -n "$rkn_list" ]] && grep -Fxq "$EXTERNAL_IPV4" <<<"$rkn_list"; then
+      rkn_hit=true
+    else
+      local prefix_24
+      prefix_24=$(echo "$EXTERNAL_IPV4" | sed -E 's/\.[0-9]+$/.0\/24/')
+      local ipsum_list
+      ipsum_list=$(curl -sL --connect-timeout 2 --max-time 3 "https://antifilter.network/download/ipsum.lst" 2>/dev/null || echo "")
+      if [[ -n "$ipsum_list" ]] && grep -Fq "$prefix_24" <<<"$ipsum_list"; then
+        rkn_hit=true
+      fi
+    fi
+
+    if [[ "$rkn_hit" == "true" ]]; then
+      NODE_RKN_STATUS="BLOCKED in RU (Antifilter Registry)"
+      NODE_RKN_COLOR="1;31"
+    else
+      NODE_RKN_STATUS="Clean (Not in Registry)"
+      NODE_RKN_COLOR="1;32"
+    fi
+  else
+    NODE_RKN_STATUS="N/A"
+    NODE_RKN_COLOR="0;90"
+  fi
+
+  # Zero-Probing & Active Anti-Censorship Perimeter Check (Ports 80/443)
+  local p80 p443 p80_loc="" p443_cert="" leak_found=false
   p80=$(curl -s -m 2 -o /dev/null -w "%{http_code}" http://127.0.0.1/ 2>/dev/null)
-  p80="${p80: -3}"
-  p80="${p80:-000}"
+  p80="${p80: -3}"; p80="${p80:-000}"
 
   p443=$(curl -sk -m 2 -o /dev/null -w "%{http_code}" https://127.0.0.1/ 2>/dev/null)
-  p443="${p443: -3}"
-  p443="${p443:-000}"
-  if [[ "$p80" == "000" && "$p443" == "000" ]]; then
-    NODE_ZERO_PROBE="Closed (No Local Web Service)"
+  p443="${p443: -3}"; p443="${p443:-000}"
+
+  # Check domain leak in HTTP redirect
+  if [[ "$p80" =~ ^(301|308)$ ]]; then
+    p80_loc=$(curl -s -I -m 2 http://127.0.0.1/ 2>/dev/null | grep -i '^Location:' | tr -d '\r\n')
+    if [[ -n "$p80_loc" ]] && grep -oE 'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$p80_loc" | grep -qvE '(127\.0\.0\.1|localhost)'; then
+      leak_found=true
+    fi
+  fi
+
+  # Check domain leak in TLS certificate CN/SAN
+  if [[ "$p443" != "000" ]] && is_command_available openssl; then
+    p443_cert=$(echo | timeout 2 openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null || echo "")
+    if grep -oE '[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$p443_cert" | grep -qvE '(127\.0\.0\.1|localhost|local|example)'; then
+      leak_found=true
+    fi
+  fi
+
+  if [[ "$leak_found" == "true" ]]; then
+    NODE_ZERO_PROBE="⚠️ Vulnerable (Domain Leak to TSPU in Redirect/Cert)"
+    NODE_ZERO_PROBE_COLOR="1;31"
+  elif [[ "$p80" == "000" && "$p443" == "000" ]]; then
+    NODE_ZERO_PROBE="Protected (Ports Closed / Silent Drop)"
+    NODE_ZERO_PROBE_COLOR="1;32"
   elif [[ "$p80" =~ ^(404|421)$ || "$p443" =~ ^(404|421)$ ]]; then
-    NODE_ZERO_PROBE="Active Fallback (HTTP $p80/$p443)"
-  elif [[ "$p80" =~ ^(301|308)$ ]]; then
-    NODE_ZERO_PROBE="Warning (HTTP 80 Redirects)"
+    NODE_ZERO_PROBE="Protected (Active Fallback HTTP $p80/$p443)"
+    NODE_ZERO_PROBE_COLOR="1;32"
   elif [[ "$p80" == "200" || "$p443" == "200" ]]; then
-    NODE_ZERO_PROBE="Active Web Server (HTTP 200)"
+    NODE_ZERO_PROBE="Caution (Web Server Active HTTP 200, Check Camouflage)"
+    NODE_ZERO_PROBE_COLOR="1;33"
   else
-    NODE_ZERO_PROBE="Response ($p80/$p443)"
+    NODE_ZERO_PROBE="Protected (HTTP $p80/$p443 No Leaks)"
+    NODE_ZERO_PROBE_COLOR="1;32"
+  fi
+
+  # SelfSteal SNI Verification (nDPI NDPI_UNRESOLVED_HOSTNAME check)
+  if [[ -n "$CHECK_SNI" ]]; then
+    local sni_ip
+    sni_ip=$(curl_wrapper GET "https://cloudflare-dns.com/dns-query?name=${CHECK_SNI}&type=A" -H "accept: application/dns-json" --timeout 3 2>/dev/null | jq -r '.Answer[]? | select(.type==1) | .data' 2>/dev/null | head -n1 || echo "")
+    if [[ -n "$sni_ip" ]]; then
+      if [[ "$sni_ip" == "$EXTERNAL_IPV4" ]]; then
+        NODE_SNI_STATUS="Valid SelfSteal (Domain resolves to node IP $EXTERNAL_IPV4)"
+        NODE_SNI_COLOR="1;32"
+      else
+        NODE_SNI_STATUS="⚠️ Mismatch! Domain resolves to $sni_ip, node is $EXTERNAL_IPV4 (Risk of NDPI_UNRESOLVED_HOSTNAME)"
+        NODE_SNI_COLOR="1;31"
+      fi
+    else
+      NODE_SNI_STATUS="Cannot resolve domain $CHECK_SNI"
+      NODE_SNI_COLOR="0;90"
+    fi
   fi
 }
 
@@ -1148,49 +1253,59 @@ ping_host() {
 
 iperf_speed_test() {
   local host="$1"
-  shift
-  local ports=("$@")
-  if [[ ${#ports[@]} -eq 0 ]]; then ports=(5201 5202); fi
+  local fallback_host="${2:-}"
+  local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
 
-  for p in "${ports[@]}"; do
-    # Fast TCP pre-check to skip immediately if port is closed or firewalled
-    if ! timeout 1 bash -c "echo > /dev/tcp/$host/$p" 2>/dev/null; then
-      continue
-    fi
+  local target_hosts=("$host")
+  if [[ -n "$fallback_host" && "$fallback_host" != "$host" ]]; then
+    target_hosts+=("$fallback_host")
+  fi
 
-    # 1. Try --bidir first (duplex test in 2s, 2 streams)
-    local res
-    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 -P 2 --bidir -J 2>/dev/null || echo "")
-    if [[ -n "$res" ]] && jq -e '.end.sum_sent_bidir_reverse.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
-      local tx_bps rx_bps dl ul
-      tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
-      rx_bps=$(jq -r '.end.sum_sent_bidir_reverse.bits_per_second // 0' <<<"$res")
-      if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-        dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-        ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-        echo "↓ $dl / ↑ $ul"
-        return
+  for cur_host in "${target_hosts[@]}"; do
+    for p in "${ports[@]}"; do
+      # Fast TCP pre-check (0.8s timeout)
+      if ! timeout 0.8 bash -c "echo > /dev/tcp/$cur_host/$p" 2>/dev/null; then
+        continue
       fi
-    fi
 
-    # 2. If --bidir not supported (e.g. Hostkey), test TX (Download into RU) then RX with -R (Upload from RU)
-    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 -P 2 -J 2>/dev/null || echo "")
-    if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
-      local tx_bps rx_bps dl="—" ul="—"
-      tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
-      if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-        dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-
-        local res_rx
-        res_rx=$(timeout 3.5 iperf3 -c "$host" -p "$p" -R -t 2 -P 2 -J 2>/dev/null || echo "")
-        if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
-          rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
+      # 1. Try --bidir first (duplex test in 1.5s, 2 parallel streams)
+      local res
+      res=$(timeout 3 iperf3 -c "$cur_host" -p "$p" -t 1.5 -P 2 --bidir -J 2>/dev/null || echo "")
+      if [[ -n "$res" ]] && jq -e '.end.sum_sent_bidir_reverse.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
+        local tx_bps rx_bps dl ul
+        tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
+        rx_bps=$(jq -r '.end.sum_sent_bidir_reverse.bits_per_second // 0' <<<"$res")
+        if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+          dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
           ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+          local note=""
+          if [[ "$cur_host" == "$fallback_host" ]]; then note=" (F)"; fi
+          echo "↓ $dl / ↑ $ul$note"
+          return
         fi
-        echo "↓ $dl / ↑ $ul"
-        return
       fi
-    fi
+
+      # 2. If --bidir not supported, test TX then RX (-R)
+      res=$(timeout 2.5 iperf3 -c "$cur_host" -p "$p" -t 1.5 -P 2 -J 2>/dev/null || echo "")
+      if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
+        local tx_bps rx_bps dl="—" ul="—"
+        tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
+        if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+          dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+
+          local res_rx
+          res_rx=$(timeout 2.5 iperf3 -c "$cur_host" -p "$p" -R -t 1.5 -P 2 -J 2>/dev/null || echo "")
+          if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
+            rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
+            ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+          fi
+          local note=""
+          if [[ "$cur_host" == "$fallback_host" ]]; then note=" (F)"; fi
+          echo "↓ $dl / ↑ $ul$note"
+          return
+        fi
+      fi
+    done
   done
 
   echo "—"
@@ -1219,16 +1334,23 @@ measure_ru_connectivity() {
   RU_PING_IRK=$(<"$p_dir/irk")
 
   test_region_speed() {
-    local label="$1" ping_val="$2" host="$3"
-    shift 3
-    local ports=("$@")
+    local label="$1" ping_val="$2" host="$3" fallback_host="$4" test_iperf_default="$5"
     local speed="—"
 
+    local should_run=false
     if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
+      if [[ "$RUN_FULL_IPERF" == "true" || "$test_iperf_default" == "true" ]]; then
+        should_run=true
+      fi
+    fi
+
+    if [[ "$should_run" == "true" ]]; then
       if [[ "$JSON_OUTPUT" != "true" ]]; then
         printf "    \033[1;33m⏳\033[0m %s: %s | замер iPerf3...\r" "$label" "$ping_val"
       fi
-      speed=$(iperf_speed_test "$host" "${ports[@]}")
+      speed=$(iperf_speed_test "$host" "$fallback_host")
+    elif [[ "$RUN_IPERF" == "true" && "$RUN_FULL_IPERF" != "true" ]]; then
+      speed="— (--full-iperf)"
     fi
 
     if [[ "$JSON_OUTPUT" != "true" ]]; then
@@ -1238,15 +1360,112 @@ measure_ru_connectivity() {
     ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
   }
 
-  test_region_speed "Москва (Центр, Hostkey / MSK-IX)" "$RU_PING_MSK" "spd-rudp.hostkey.ru" 5202 5201 5203
-  test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" 5201 5202
-  test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" 5201 5202
-  test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" 5201 5202
-  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" 5201 5202
-  test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" 5201 5202
-  test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" 5201 5202
+  test_region_speed "Москва (Центр, Hostkey / MSK-IX)" "$RU_PING_MSK" "spd-rudp.hostkey.ru" "st.tver.ertelecom.ru" true
+  test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" "st.yar.ertelecom.ru" false
+  test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" "st.chelny.ertelecom.ru" false
+  test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" "st.volgograd.ertelecom.ru" false
+  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" "st.chel.ertelecom.ru" true
+  test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" "st.tomsk.ertelecom.ru" false
+  test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" "st.krsk.ertelecom.ru" false
 
   IFS=$'\t' read -r _ _ RU_IPERF_SPEED <<<"${ARR_CONNECTIVITY[0]}"
+}
+
+# ------------------------------------------------------------------------------
+# 5. White List (WL) & Russian CDN Readiness
+# ------------------------------------------------------------------------------
+
+measure_whitelist_readiness() {
+  if [[ "$NODE_COUNTRY_CODE" == "RU" ]]; then
+    WL_NODE_ROLE="Origin / Ingress (Внутри РФ)"
+  else
+    WL_NODE_ROLE="Exit / Outbound (Зарубежный шлюз)"
+  fi
+
+  local wl_dir="$TMP_WORK_DIR/wl"
+  mkdir -p "$wl_dir"
+
+  (
+    # Tier 1: State Messenger MAX (max.ru)
+    local c1
+    c1=$(curl_http_code "https://max.ru/")
+    echo "$c1" > "$wl_dir/max"
+  ) &
+
+  (
+    # Tier 2: Yandex Anycast CDN (yastatic.net)
+    local c2
+    c2=$(curl_http_code "https://yastatic.net/")
+    echo "$c2" > "$wl_dir/yandex"
+  ) &
+
+  (
+    # Tier 2: VK Cloud (vk.com)
+    local c3
+    c3=$(curl_http_code "https://vk.com/")
+    echo "$c3" > "$wl_dir/vk"
+  ) &
+
+  (
+    # Tier 2: Gosuslugi (gosuslugi.ru)
+    local c4
+    c4=$(curl_http_code "https://gosuslugi.ru/")
+    echo "$c4" > "$wl_dir/gosuslugi"
+  ) &
+
+  wait
+
+  local res_max res_ya res_vk res_gu
+  res_max=$(<"$wl_dir/max")
+  res_ya=$(<"$wl_dir/yandex")
+  res_vk=$(<"$wl_dir/vk")
+  res_gu=$(<"$wl_dir/gosuslugi")
+
+  WL_ANYCAST_RTT="N/A"
+  if [[ -n "$RU_PING_MSK" && "$RU_PING_MSK" != "N/A" ]]; then
+    WL_ANYCAST_RTT="$RU_PING_MSK"
+  fi
+
+  local rtt_num
+  rtt_num=$(echo "$WL_ANYCAST_RTT" | grep -oE '^[0-9]+(\.[0-9]+)?' || echo "999")
+  if (( $(awk -v r="$rtt_num" 'BEGIN { print (r <= 80) ? 1 : 0 }') )); then
+    WL_CASCADE_STATUS="Отлично (<80 ms, минимальный джиттер)"
+  elif (( $(awk -v r="$rtt_num" 'BEGIN { print (r <= 120) ? 1 : 0 }') )); then
+    WL_CASCADE_STATUS="Допустимо (80–120 ms, возможен джиттер)"
+  else
+    WL_CASCADE_STATUS="В зоне риска (>120 ms: риск 504 Gateway Timeout)"
+  fi
+
+  local cdn_check_status=""
+  if [[ -n "$CUSTOM_CDN_ENDPOINT" ]]; then
+    local cdn_res
+    cdn_res=$(curl -sS -D - -o /dev/null -X GET -H "data-0: dGVzdA==" --max-time 4 "$CUSTOM_CDN_ENDPOINT?nocache=$(date +%s)" 2>/dev/null || echo "")
+    if grep -q "204" <<<"$cdn_res" || grep -iq "x-cdn-origin: ok" <<<"$cdn_res"; then
+      cdn_check_status="OK (HTTP 204 / Bodiless Header Uplink)"
+    elif grep -q "413" <<<"$cdn_res"; then
+      cdn_check_status="⚠️ 413 (CDN blocks bodies, use Header Uplink)"
+    elif grep -q "504" <<<"$cdn_res"; then
+      cdn_check_status="⚠️ 504 (Gateway Timeout, Origin unreachable)"
+    elif grep -q "502" <<<"$cdn_res"; then
+      cdn_check_status="⚠️ 502 (Bad Gateway, check Origin port/cert)"
+    else
+      local http_code
+      http_code=$(grep -oE "HTTP/[0-9.]+ [0-9]{3}" <<<"$cdn_res" | head -n1 || echo "Error")
+      cdn_check_status="$http_code"
+    fi
+  fi
+
+  ARR_WHITELIST=()
+  ARR_WHITELIST+=( "Роль ноды в топологии"$'\t'"$WL_NODE_ROLE" )
+  ARR_WHITELIST+=( "Мессенджер MAX (max.ru, Уровень 1)"$'\t'"$([[ "$res_max" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_max)")" )
+  ARR_WHITELIST+=( "Anycast Яндекс / CDN (yastatic.net, Уровень 2)"$'\t'"$([[ "$res_ya" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_ya)")" )
+  ARR_WHITELIST+=( "VK Cloud / ВКонтакте (vk.com, Уровень 2)"$'\t'"$([[ "$res_vk" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_vk)")" )
+  ARR_WHITELIST+=( "Портал Госуслуг (gosuslugi.ru, Уровень 2)"$'\t'"$([[ "$res_gu" =~ ^(200|301|302)$ ]] && echo "OK (Доступен)" || echo "Blocked ($res_gu)")" )
+  ARR_WHITELIST+=( "Задержка до Anycast РФ (RTT)"$'\t'"$WL_ANYCAST_RTT — $WL_CASCADE_STATUS" )
+  ARR_WHITELIST+=( "Стек протоколов под Белые Списки"$'\t'"UDP мертв в WL ➔ VLESS XHTTP over TCP/TLS 443" )
+  if [[ -n "$CUSTOM_CDN_ENDPOINT" ]]; then
+    ARR_WHITELIST+=( "Кастомный CDN ($CUSTOM_CDN_ENDPOINT)"$'\t'"$cdn_check_status" )
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -1290,8 +1509,13 @@ print_header() {
     fi
     echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
     echo -e " Тип хоста:\t$(bold "$NODE_TYPE")"
+    echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
+    echo -e " Path MTU (PMTU):\t$(bold "$NODE_PMTU") (Рек. для WG: $NODE_RECOMMENDED_MTU)"
+    if [[ -n "$CHECK_SNI" ]]; then
+      echo -e " SelfSteal SNI:\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
+    fi
   } | format_table
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
@@ -1414,14 +1638,31 @@ print_results() {
   fi
   printf "\n"
 
-  # 5. Security & Fallback
-  printf "\033[1;97m5. 🛡 Локальный веб-сервер и защита портов (Local Web/Fallback Check)\033[0m\n"
+  # 5. White List Readiness Table
+  printf "\033[1;97m5. ⚪ Готовность к режиму «Белых списков» (White List & RU CDN Readiness)\033[0m\n"
   {
-    echo -e "  Локальный Fallback (127.0.0.1:80/443)\t$(format_value "$NODE_ZERO_PROBE")"
+    echo -e "  Параметр / Узел\tСтатус"
+    echo -e "  ------------------------------------\t------"
+    for row in "${ARR_WHITELIST[@]}"; do
+      IFS=$'\t' read -r name val <<<"$row"
+      echo -e "  $name\t$(format_value "$val")"
+    done
   } | format_table
   printf "\n"
 
-  # 6. Final Verdict
+  # 6. Security & Zero-Probing Table
+  printf "\033[1;97m6. 🛡 Безопасность периметра и Zero-Probing (Anti-Active Probing / SelfSteal)\033[0m\n"
+  {
+    echo -e "  Тест периметра\tРезультат"
+    echo -e "  ------------------------------------\t------"
+    echo -e "  Защита от зондов ТСПУ (80/443)\t$(color "$NODE_ZERO_PROBE_COLOR" "$NODE_ZERO_PROBE")"
+    if [[ -n "$CHECK_SNI" ]]; then
+      echo -e "  Сверка SNI ➔ DNS (nDPI)\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
+    fi
+  } | format_table
+  printf "\n"
+
+  # 7. Final Verdict
   print_verdict
 }
 
@@ -1527,7 +1768,27 @@ calculate_verdict() {
     VERDICT_DEDUCTIONS+=("Нет ответа ICMP пинга до РФ (-1.5)")
   fi
 
-  # 4. Host stack & health
+  # 4. Host stack, security & RKN
+  if [[ "$NODE_RKN_STATUS" == *"BLOCKED"* ]]; then
+    score=$(( score - 40 ))
+    VERDICT_DEDUCTIONS+=("КРИТИЧНО: IP ноды занесен в реестр блокировок РКН (-4.0)")
+  fi
+
+  if [[ "$NODE_ZERO_PROBE" == *"Vulnerable"* ]]; then
+    score=$(( score - 10 ))
+    VERDICT_DEDUCTIONS+=("Утечка домена сканерам ТСПУ на портах 80/443 (-1.0)")
+  fi
+
+  if [[ "$NODE_SNI_STATUS" == *"Mismatch"* ]]; then
+    score=$(( score - 10 ))
+    VERDICT_DEDUCTIONS+=("Несоответствие SNI и DNS (риск NDPI_UNRESOLVED_HOSTNAME: -1.0)")
+  fi
+
+  if [[ "$WL_CASCADE_STATUS" == *"В зоне риска"* ]]; then
+    score=$(( score - 5 ))
+    VERDICT_DEDUCTIONS+=("Задержка каскада до Anycast РФ >120ms (риск таймаута CDN 504: -0.5)")
+  fi
+
   if [[ "$NODE_BBR_STATUS" != *"Active"* ]]; then
     score=$(( score - 3 ))
     VERDICT_DEDUCTIONS+=("TCP BBR не включен (-0.3)")
@@ -1583,6 +1844,10 @@ print_verdict() {
   printf "   - Зарубежные сервисы: Обход блокировок функционирует (%s/%s сервисов доступно).\n" \
     "$VERDICT_UNBLOCK_OK" "$VERDICT_UNBLOCK_TOTAL"
 
+  if [[ "$NODE_RKN_STATUS" == *"BLOCKED"* ]]; then
+    printf "   - 🚫 \033[1;31mВНИМАНИЕ:\033[0m IP ноды занесен в реестр блокировок РКН! Соединение из РФ блокируется.\n"
+  fi
+
   if [[ "$YOUTUBE_AD_FREE" == "true" ]]; then
     printf "   - \033[1;32mYouTube: Без рекламы 🎬 (Регион %s)\033[0m\n" "$YOUTUBE_DETECTED_CC"
   fi
@@ -1617,6 +1882,17 @@ print_verdict() {
   else
     printf "   - \033[1;32mСервисы РФ:\033[0m Все банки и сервисы РФ открываются напрямую без ограничений.\n"
   fi
+
+  if [[ -n "$WL_NODE_ROLE" ]]; then
+    if [[ "$WL_NODE_ROLE" == *"Origin"* ]]; then
+      printf "   - ⚪ \033[1;32mБелые списки (WL):\033[0m Узел внутри РФ (Origin). Доступен для Anycast CDN-фронтинга.\n"
+    else
+      printf "   - ⚪ \033[1;36mБелые списки (WL):\033[0m Зарубежный Exit. Каскад VLESS XHTTP через CDN: %s (RTT %s).\n" "$WL_CASCADE_STATUS" "$WL_ANYCAST_RTT"
+    fi
+  fi
+
+  printf "   - 🛡 \033[1;33mСетевой стек под VPN:\033[0m Path MTU %s (Рекомендуемый для WG/AWG: \033[1;97m%s\033[0m).\n" "$NODE_PMTU" "$NODE_RECOMMENDED_MTU"
+  printf "   - ⚠️ \033[0;90mПримечание WL:\033[0m В режиме Белых Списков UDP полностью блокируется ТСПУ — WireGuard/AWG не работают, используйте VLESS XHTTP over TCP/TLS 443.\n"
 
   printf "   - Связность: Москва %s, СПб %s, Поволжье %s, Урал %s, Сибирь %s.\n" \
     "$RU_PING_MSK" "$RU_PING_SPB" "$RU_PING_KZN" "$RU_PING_EKAT" "$RU_PING_NSK"
@@ -1663,6 +1939,12 @@ build_json() {
     conn_json=$(jq --arg k "$name" --arg p "$ping_val" --arg s "$speed_val" '.[$k] = {latency: $p, speed: $s}' <<<"$conn_json")
   done
 
+  local whitelist_json="{}"
+  for row in "${ARR_WHITELIST[@]}"; do
+    IFS=$'\t' read -r name val <<<"$row"
+    whitelist_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$whitelist_json")
+  done
+
   local deductions_json="[]"
   if [[ ${#VERDICT_DEDUCTIONS[@]} -gt 0 ]]; then
     deductions_json=$(jq -c -n '$ARGS.positional' --args "${VERDICT_DEDUCTIONS[@]}")
@@ -1677,10 +1959,14 @@ build_json() {
     --arg host_type "${NODE_TYPE:-}" \
     --arg risk "${NODE_RISK:-}" \
     --arg captcha "${NODE_CAPTCHA_STATUS:-}" \
+    --arg rkn "${NODE_RKN_STATUS:-}" \
+    --arg pmtu "${NODE_PMTU:-}" \
+    --arg rec_mtu "${NODE_RECOMMENDED_MTU:-}" \
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
     --arg zero_probe "${NODE_ZERO_PROBE:-}" \
+    --arg sni_status "${NODE_SNI_STATUS:-}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
     --arg verdict_score "$VERDICT_SCORE" \
@@ -1692,13 +1978,15 @@ build_json() {
     --argjson unblock "$unblock_json" \
     --argjson local "$local_json" \
     --argjson connectivity "$conn_json" \
+    --argjson whitelist "$whitelist_json" \
     '{
       ip: $ip,
       location: { country: $country, city: $city, asn: $asn, org: $org },
-      quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha },
-      network: { bbr: $bbr, udp: $udp, port25: $port25 },
-      security: { zero_probe: $zero_probe },
+      quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
+      network: { bbr: $bbr, udp: $udp, port25: $port25, pmtu: $pmtu, recommended_mtu: $rec_mtu },
+      security: { zero_probe: $zero_probe, sni_status: $sni_status },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
+      whitelist_readiness: $whitelist,
       verdict: {
         score: ($verdict_score | tonumber),
         rating: $verdict_rating,
@@ -1717,14 +2005,17 @@ display_help() {
   cat <<EOF
 Usage: nodecheck.sh [OPTIONS]
 
-NodeCheck (RU Edition) - VPN Node Quality, Geolocation & Censorship Auditor
+NodeCheck (RU Edition) - Comprehensive VPN Node Quality & Censorship Auditor
 
 Options:
   -h, --help               Show this help message and exit
   -v, --verbose            Enable verbose logging
   -d, --debug              Enable debug mode (saves trace to $DEBUG_LOG_FILE)
   -j, --json               Output results in pure JSON format
-  --no-iperf               Skip 3-second iPerf3 speedtest
+  --no-iperf               Skip iPerf3 speedtest (latency ping only)
+  --full-iperf             Run iPerf3 duplex speedtest on all 7 Russian regions
+  --sni DOMAIN             Verify domain against node IP (protect against NDPI_UNRESOLVED_HOSTNAME)
+  --cdn URL                Validate VLESS XHTTP CDN endpoint (Bodiless GET / Header Uplink check)
   -p, --proxy ADDR         Use SOCKS5/SOCKS5h proxy (format: host:port)
   -i, --interface IF       Bind requests to network interface (e.g. eth0, wg0)
   --no-doh                 Disable DNS-over-HTTPS (use system resolver)
@@ -1732,6 +2023,9 @@ Options:
 
 Examples:
   ./nodecheck.sh                         # Run full audit (GeoIP, Unblock, RU Geoblock, All-RU Ping, iPerf3)
+  ./nodecheck.sh --full-iperf            # Test iPerf3 bandwidth on all 7 RU regions
+  ./nodecheck.sh --sni mydomain.com      # Validate domain against IP for SelfSteal SNI
+  ./nodecheck.sh --cdn https://cdn.x.com # Test VLESS XHTTP CDN endpoint
   ./nodecheck.sh --no-iperf              # Run audit without bandwidth speedtest
   ./nodecheck.sh -p 127.0.0.1:1080       # Audit VPN/Proxy node via SOCKS5
   ./nodecheck.sh -j                      # Output pure JSON for monitoring / bots
@@ -1761,6 +2055,24 @@ parse_arguments() {
       --no-iperf)
         RUN_IPERF=false
         shift
+        ;;
+      --full-iperf)
+        RUN_FULL_IPERF=true
+        shift
+        ;;
+      --sni)
+        if [[ $# -lt 2 || "$2" == -* ]]; then
+          error_exit "Option $1 requires a domain argument"
+        fi
+        CHECK_SNI="$2"
+        shift 2
+        ;;
+      --cdn)
+        if [[ $# -lt 2 || "$2" == -* ]]; then
+          error_exit "Option $1 requires a URL argument"
+        fi
+        CUSTOM_CDN_ENDPOINT="$2"
+        shift 2
         ;;
       -p|--proxy)
         if [[ $# -lt 2 || "$2" == -* ]]; then
@@ -1809,7 +2121,7 @@ main() {
   check_doh
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 1/4:\033[0m Определение параметров ноды...\n"
+    printf "\033[1;36m[*] Шаг 1/5:\033[0m Определение параметров ноды, MTU и реестра РКН...\n"
   fi
   discover_external_ips
 
@@ -1826,7 +2138,7 @@ main() {
 
   # 1. 18 GeoIP Databases
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 2/4:\033[0m Опрос 18 GeoIP баз данных (параллельно)...\n"
+    printf "\033[1;36m[*] Шаг 2/5:\033[0m Опрос 18 GeoIP баз данных (параллельно)...\n"
   fi
   run_geoip_consensus
 
@@ -1836,7 +2148,7 @@ main() {
 
   # 2. Western Services & RU Local Services
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 3/4:\033[0m Проверка 33 сервисов обхода цензуры и Рунета (параллельно)...\n"
+    printf "\033[1;36m[*] Шаг 3/5:\033[0m Проверка 33 сервисов обхода цензуры и Рунета (параллельно)...\n"
   fi
   run_services_check
 
@@ -1851,9 +2163,15 @@ main() {
 
   # 3. Connectivity
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 4/4:\033[0m Замер связности и скорости по 7 регионам РФ (в реальном времени):\n"
+    printf "\033[1;36m[*] Шаг 4/5:\033[0m Замер связности и скорости по 7 регионам РФ (в реальном времени):\n"
   fi
   measure_ru_connectivity
+
+  # 4. White List & Cascade Readiness
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;36m[*] Шаг 5/5:\033[0m Аудит готовности к Белым Спискам и каскаду VLESS XHTTP...\n"
+  fi
+  measure_whitelist_readiness
 
   printf "\n"
   print_results
