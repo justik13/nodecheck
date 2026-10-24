@@ -49,8 +49,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 ## 📊 Что проверяет VPNCheck
 
 ### 1. 🌐 Консенсус 18 GeoIP баз данных
-* IPinfo.io, IP-API.com, Cloudflare (Trace), IP.SB, Ipregistry, IP-API.co, IP2Location.io, Country.is, GeoJS, 2ip.io, ipwho.is, ifconfig.co, IPLocation.net, ipbase.com, ipquery.io, IPAPI.is, RIPE NCC, Geoapify.
-* Отображение таблицы стран, процента согласия (Consensus Agreement) и распределения долей.
+* IPinfo.io, IP-API.com, Cloudflare (Trace), IP.SB, Ipregistry, IP-API.co, IP2Location.io, Country.is, GeoJS, 2ip.io, ipwho.is, ifconfig.co, IPLocation.net, ipbase.com, ipquery.io, IPAPI.is, RIPE NCC, IP.Guide.
+* Отображение таблицы стран, процента согласия (Consensus Agreement) и отсортированной таблицы распределения долей.
 
 ### 2. 🔓 Обход блокировок (Western Services)
 * **Instagram & Threads (Meta)** — проверка веб-шлюза и доступности контента.
@@ -58,7 +58,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 * **Twitter / X** — доступность `x.com`.
 * **AI-платформы:** OpenAI ChatGPT, Anthropic Claude (проверка на 403 Cloudflare бан), Google Gemini.
 * **Google & YouTube:** Строгая проверка региона аккаунта Google (GlifSetupAndroid), детекция региона YouTube с бейджем `[Без рекламы 🎬]`, YouTube CDN (код аэропорта IATA), YouTube Premium и YouTube Music.
-* **Медиа и стриминг:** Rutracker, Spotify Signup, Netflix.
+* **Медиа, игры и стриминг:** Rutracker, Spotify Signup, Netflix, Steam Store, PlayStation Network, Reddit, Apple Services.
 
 ### 3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
 * **Госуслуги:** `gosuslugi.ru`.
@@ -91,92 +91,101 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 ================================================================================
  🇷🇺 VPNCheck (RU Edition) - VPN Node & Quality Auditor v3.1.0-ru
 ================================================================================
- IPv4:              168.222.254.191
- Локация / ASN:     DE (Frankfurt am Main) — AS198550 (NODE HOST LIMITED)
- Тип хоста:         Data Center / Hosting
- Антифрод / Риск:   Clean / Low Risk (0/100), Google Captcha: No
- Сетевой стек:      BBR: Active | UDP: Open | Port 25: Open
+ IPv4:             168.222.254.191
+ Локация / ASN:    DE (Frankfurt am Main) — AS198550 (NODE HOST LIMITED)
+ Тип хоста:        Residential / ISP
+ Антифрод / Риск:  Clean / Low Risk (0/100), Google Captcha: No
+ Сетевой стек:     BBR: Active | UDP: Open | Port 25: Open
 ================================================================================
 
 1. 🌐 Консенсус GeoIP баз данных (18 источников)
-  База данных                  Страна (IPv4)
-  ---------------------------- -------------
-  IPinfo.io                    DE
-  IP-API.com                   DE
-  Cloudflare                   DE
-  IP.SB                        DE
-  Ipregistry                   DE
-  IP-API.co                    DE
-  IP2Location.io               DE
-  Country.is                   DE
-  GeoJS                        DE
-  2ip.io                       DE
-  ipwho.is                     DE
-  ifconfig.co                  US
-  IPLocation.net               DE
-  ipbase.com                   DE
-  ipquery.io                   US
-  IPAPI.is                     IN
-  RIPE NCC                     DE
-  Geoapify                     N/A
+  База данных                   Страна (IPv4)
+  ----------------------------  -------------
+  IPinfo.io                     DE
+  IP-API.com                    DE
+  Cloudflare                    DE
+  IP.SB                         DE
+  Ipregistry                    DE
+  IP-API.co                     DE
+  IP2Location.io                DE
+  Country.is                    DE
+  GeoJS                         DE
+  2ip.io                        DE
+  ipwho.is                      DE
+  ifconfig.co                   US
+  IPLocation.net                DE
+  ipbase.com                    DE
+  ipquery.io                    US
+  IPAPI.is                      IN
+  RIPE NCC                      DE
+  IP.Guide                      DE
 
-  Консенсус: DE (Germany) — 14/17 (82.4%)
-  Распределение: DE: 14 (82.4%), IN: 1 (5.9%), US: 2 (11.8%)
+  Консенсус: DE (Germany) — 15/18 (83.3%)
+
+  Код  Страна         Доля (IPv4)
+  ---  ------         -----------
+  DE   Germany        83.3% (15/18)
+  US   United States  11.1% (2/18)
+  IN   India          5.6% (1/18)
 
 2. 🔓 Обход блокировок в РФ (Western Services)
-  Сервис                               Статус
-  ------------------------------------ ------
-  Instagram (Meta)                     Yes
-  Discord (Voice/Gateway)              Yes
-  Twitter / X                          Yes
-  OpenAI ChatGPT                       DE
-  Anthropic Claude AI                  No (403 Cloudflare)
-  Google (Регион)                      GB
-  Google Gemini                        Yes (GB)
-  YouTube                              GB
-  YouTube CDN                          Yes (FRA)
-  YouTube Premium                      Yes
-  YouTube Music                        Yes
-  Rutracker                            Yes
-  Spotify Signup                       Yes
-  Netflix                              Yes
+  Сервис                                Статус
+  ------------------------------------  ------
+  Instagram (Meta)                      Yes
+  Discord (Voice/Gateway)               Yes
+  Twitter / X                           Yes
+  OpenAI ChatGPT                        DE
+  Anthropic Claude AI                   No (403 Cloudflare)
+  Google (Регион)                       GB
+  Google Gemini                         Yes (GB)
+  YouTube                               GB
+  YouTube CDN                           Yes (VMC)
+  YouTube Premium                       Yes
+  YouTube Music                         Yes
+  Rutracker                             Yes
+  Spotify Signup                        Yes
+  Netflix                               Yes
+  Steam Store (Игры)                    Yes
+  PlayStation Network                   Yes
+  Reddit                                Yes
+  Apple Services                        DE
 
 3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
-  Сервис                               Статус
-  ------------------------------------ ------
-  Госуслуги (gosuslugi.ru)             OK
-  Яндекс (ya.ru)                       OK
-  ВКонтакте (vk.com)                   OK
-  СберБанк (sberbank.ru)               Blocked (Timeout)
-  Т-Банк (tbank.ru)                    Blocked (Timeout)
-  ВТБ (vtb.ru)                         Blocked (Timeout)
-  Авито (avito.ru)                     Blocked (000)
-  Кинопоиск (kinopoisk.ru)             OK
+  Сервис                                Статус
+  ------------------------------------  ------
+  Госуслуги (gosuslugi.ru)              OK
+  Яндекс (ya.ru)                        OK
+  ВКонтакте (vk.com)                    OK
+  СберБанк (sberbank.ru)                Blocked (Timeout)
+  Т-Банк (tbank.ru)                     Blocked (Timeout)
+  ВТБ (vtb.ru)                          Blocked (Timeout)
+  Авито (avito.ru)                      OK
+  Кинопоиск (kinopoisk.ru)              OK
 
 4. ⚡️ Связность по регионам РФ (Multi-Region Latency & Throughput)
-  Регион / Тест                        Задержка / Скорость
-  ------------------------------------ -------------------
-  Москва (Центр, MSK-IX)               45.9 ms
-  Санкт-Петербург (Северо-Запад)       60.0 ms
-  Ростов-на-Дону (Юг)                  65.1 ms
-  Казань (Поволжье)                    60.7 ms
-  Екатеринбург (Урал)                  66.5 ms
-  Новосибирск (Сибирь)                 95.5 ms
-  Иркутск (Восточная Сибирь)           116.2 ms
-  iPerf3 Скорость до Москвы (10G Port) 696 Mbps
+  Регион / Тест                         Задержка / Скорость
+  ------------------------------------  -------------------
+  Москва (Центр, MSK-IX)                45.9 ms
+  Санкт-Петербург (Северо-Запад)        59.9 ms
+  Ростов-на-Дону (Юг)                   64.4 ms
+  Казань (Поволжье)                     60.0 ms
+  Екатеринбург (Урал)                   66.4 ms
+  Новосибирск (Сибирь)                  95.7 ms
+  Иркутск (Восточная Сибирь)            116.0 ms
+  iPerf3 Скорость до Москвы (10G Port)  740 Mbps
 
 5. 🛡 Безопасность периметра (Zero-Probing Check)
-  Порт 80/443 IP-Probe                 Normal
+  Порт 80/443 IP-Probe                  Normal
 
 ================================================================================
  ⚖️  Вердикт пригодности ноды для РФ аудитории
 ================================================================================
  • Оценка ноды: 9.3 / 10 (ОТЛИЧНО ДЛЯ VPN)
-   - Зарубежные сервисы: Обход блокировок функционирует (13/14 сервисов доступно).
-   - ⚠️ Внимание: Зарубежный IP блокируется сервисами РФ: СберБанк (sberbank.ru), Т-Банк (tbank.ru), ВТБ (vtb.ru), Авито (avito.ru).
+   - Зарубежные сервисы: Обход блокировок функционирует (17/18 сервисов доступно).
+   - ⚠️ Внимание: Зарубежный IP блокируется сервисами РФ: СберБанк (sberbank.ru), Т-Банк (tbank.ru), ВТБ (vtb.ru).
    - Рекомендация: настройте Split-Tunneling (прямой маршрут без VPN для этих доменов).
-   - Связность: Москва 45.9 ms, СПб 60.0 ms, Поволжье 60.7 ms, Урал 66.5 ms, Сибирь 95.5 ms.
-   - Пропускная способность iPerf3: 696 Mbps.
+   - Связность: Москва 45.9 ms, СПб 59.9 ms, Поволжье 60.0 ms, Урал 66.4 ms, Сибирь 95.7 ms.
+   - Пропускная способность iPerf3: 740 Mbps.
 ================================================================================
 ```
 

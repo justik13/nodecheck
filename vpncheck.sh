@@ -501,10 +501,10 @@ query_single_geoip() {
       raw=$(curl_wrapper GET "https://stat.ripe.net/data/whois/data.json?resource=${ip_val}" --timeout 3 2>/dev/null)
       cc=$(jq -r '[(.data.records[0][]? | select(.key == "country") | .value)][0] // empty' <<<"$raw")
       ;;
-    "Geoapify")
+    "IP.Guide")
       local raw
-      raw=$(curl_wrapper GET "https://api.geoapify.com/v1/ipinfo?apiKey=606555543c7b416ca214e21b777a83d6" --timeout 3 2>/dev/null)
-      cc=$(jq -r '.country.iso_code // empty' <<<"$raw")
+      raw=$(curl_wrapper GET "https://ip.guide/${ip_val}" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.location.country // empty' <<<"$raw")
       ;;
   esac
 
@@ -530,7 +530,7 @@ run_geoip_consensus() {
   local geoip_dbs=(
     "IPinfo.io" "IP-API.com" "Cloudflare" "IP.SB" "Ipregistry" "IP-API.co"
     "IP2Location.io" "Country.is" "GeoJS" "2ip.io" "ipwho.is" "ifconfig.co"
-    "IPLocation.net" "ipbase.com" "ipquery.io" "IPAPI.is" "RIPE NCC" "Geoapify"
+    "IPLocation.net" "ipbase.com" "ipquery.io" "IPAPI.is" "RIPE NCC" "IP.Guide"
   )
 
   local v4_dir="$TMP_WORK_DIR/geoip_v4"
@@ -715,6 +715,30 @@ lookup_netflix() {
   if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
 }
 
+lookup_apple() {
+  local cc
+  cc=$(curl_wrapper GET "https://gspe1-ssl.ls.apple.com/pep/gcc" --timeout 3 2>/dev/null)
+  if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then echo "${cc^^}"; else echo "Yes"; fi
+}
+
+lookup_steam() {
+  local code
+  code=$(curl_http_code "https://store.steampowered.com")
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+}
+
+lookup_playstation() {
+  local code
+  code=$(curl_http_code "https://www.playstation.com")
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+}
+
+lookup_reddit() {
+  local code
+  code=$(curl_http_code "https://www.reddit.com")
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+}
+
 # ------------------------------------------------------------------------------
 # 3. RU Reverse Geoblocking Lookups
 # ------------------------------------------------------------------------------
@@ -849,24 +873,46 @@ measure_ru_connectivity() {
 # Output Formatting
 # ------------------------------------------------------------------------------
 
-print_table_row() {
-  local name="$1"
-  local val="$2"
-  printf "  %-36s %s\n" "$name" "$(format_value "$val")"
+format_table() {
+  if is_command_available column; then
+    column -t -s $'\t'
+  else
+    awk -F '\t' '{
+      for (i=1; i<=NF; i++) {
+        clean = $i; gsub(/\033\[[0-9;]*m/, "", clean)
+        if (length(clean) > w[i]) w[i] = length(clean)
+      }
+      rows[NR] = $0
+    }
+    END {
+      for (r=1; r<=NR; r++) {
+        n = split(rows[r], cols, "\t")
+        line = ""
+        for (i=1; i<=n; i++) {
+          clean = cols[i]; gsub(/\033\[[0-9;]*m/, "", clean)
+          pad = w[i] - length(clean) + 2
+          line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
+        }
+        print line
+      }
+    }'
+  fi
 }
 
 print_header() {
   printf "\033[1;36m================================================================================\033[0m\n"
   printf " 🇷🇺 \033[1;97mVPNCheck (RU Edition) - VPN Node & Quality Auditor v%s\033[0m\n" "$SCRIPT_VERSION"
   printf "\033[1;36m================================================================================\033[0m\n"
-  printf " %-18s %s\n" "IPv4:" "$(bold "${EXTERNAL_IPV4:-N/A}")"
-  if [[ -n "$EXTERNAL_IPV6" ]]; then
-    printf " %-18s %s\n" "IPv6:" "$(bold "$EXTERNAL_IPV6")"
-  fi
-  printf " %-18s %s\n" "Локация / ASN:" "$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
-  printf " %-18s %s\n" "Тип хоста:" "$(bold "$NODE_TYPE")"
-  printf " %-18s %s, Google Captcha: %s\n" "Антифрод / Риск:" "$(color "$NODE_RISK_COLOR" "$NODE_RISK")" "$(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
-  printf " %-18s BBR: %s | UDP: %s | Port 25: %s\n" "Сетевой стек:" "$(format_value "$NODE_BBR_STATUS")" "$(format_value "$NODE_UDP_STATUS")" "$(format_value "$NODE_PORT25_STATUS")"
+  {
+    echo -e " IPv4:\t$(bold "${EXTERNAL_IPV4:-N/A}")"
+    if [[ -n "$EXTERNAL_IPV6" ]]; then
+      echo -e " IPv6:\t$(bold "$EXTERNAL_IPV6")"
+    fi
+    echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
+    echo -e " Тип хоста:\t$(bold "$NODE_TYPE")"
+    echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
+    echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
+  } | format_table
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
 
@@ -897,18 +943,21 @@ calculate_geoip_stats() {
   top_pct=$(awk "BEGIN { printf \"%.1f\", ($top_count / $total) * 100 }")
   local top_country="${COUNTRY_NAMES[$top_code]:-Unknown}"
 
-  printf "  Консенсус: \033[1;32m%s (%s)\033[0m — %s/%s (%s%%)\n" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
+  printf "  Консенсус: \033[1;32m%s (%s)\033[0m — %s/%s (%s%%)\n\n" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
 
-  local dist=()
-  for c in "${!counts[@]}"; do
-    local pct
-    pct=$(awk "BEGIN { printf \"%.1f\", (${counts[$c]} / $total) * 100 }")
-    dist+=( "$c: ${counts[$c]} ($pct%)" )
-  done
-  local dist_str
-  dist_str=$(printf ", %s" "${dist[@]}")
-  dist_str="${dist_str:2}"
-  printf "  Распределение: %s\n\n" "$dist_str"
+  {
+    echo -e "  Код\tСтрана\tДоля (IPv4)"
+    echo -e "  ---\t------\t-----------"
+    for c in "${!counts[@]}"; do
+      echo -e "${counts[$c]}\t$c"
+    done | sort -rn | while read -r cnt c; do
+      local pct
+      pct=$(awk "BEGIN { printf \"%.1f\", ($cnt / $total) * 100 }")
+      local country="${COUNTRY_NAMES[$c]:-$c}"
+      echo -e "  $c\t$country\t$pct% ($cnt/$total)"
+    done
+  } | format_table
+  printf "\n"
 }
 
 print_results() {
@@ -923,56 +972,68 @@ print_results() {
   # 1. GeoIP Consensus Table
   printf "\033[1;97m1. 🌐 Консенсус GeoIP баз данных (18 источников)\033[0m\n"
   if [[ $IPV6_SUPPORTED -eq 1 ]]; then
-    printf "  %-24s %-12s %-12s\n" "База данных" "IPv4" "IPv6"
-    printf "  %-24s %-12s %-12s\n" "------------------------" "------------" "------------"
-    for row in "${ARR_GEOIP[@]}"; do
-      IFS=$'\t' read -r name v4 v6 <<<"$row"
-      printf "  %-24s %-12s %-12s\n" "$name" "$(format_value "$v4")" "$(format_value "$v6")"
-    done
+    {
+      echo -e "  База данных\tIPv4\tIPv6"
+      echo -e "  ------------------------\t------------\t------------"
+      for row in "${ARR_GEOIP[@]}"; do
+        IFS=$'\t' read -r name v4 v6 <<<"$row"
+        echo -e "  $name\t$(format_value "$v4")\t$(format_value "$v6")"
+      done
+    } | format_table
   else
-    printf "  %-28s %s\n" "База данных" "Страна (IPv4)"
-    printf "  %-28s %s\n" "----------------------------" "-------------"
-    for row in "${ARR_GEOIP[@]}"; do
-      IFS=$'\t' read -r name v4 _ <<<"$row"
-      printf "  %-28s %s\n" "$name" "$(format_value "$v4")"
-    done
+    {
+      echo -e "  База данных\tСтрана (IPv4)"
+      echo -e "  ----------------------------\t-------------"
+      for row in "${ARR_GEOIP[@]}"; do
+        IFS=$'\t' read -r name v4 _ <<<"$row"
+        echo -e "  $name\t$(format_value "$v4")"
+      done
+    } | format_table
   fi
   printf "\n"
   calculate_geoip_stats
 
   # 2. Western Unblock Table
   printf "\033[1;97m2. 🔓 Обход блокировок в РФ (Western Services)\033[0m\n"
-  printf "  %-36s %s\n" "Сервис" "Статус"
-  printf "  %-36s %s\n" "------------------------------------" "------"
-  for row in "${ARR_RU_UNBLOCK[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    print_table_row "$name" "$val"
-  done
+  {
+    echo -e "  Сервис\tСтатус"
+    echo -e "  ------------------------------------\t------"
+    for row in "${ARR_RU_UNBLOCK[@]}"; do
+      IFS=$'\t' read -r name val <<<"$row"
+      echo -e "  $name\t$(format_value "$val")"
+    done
+  } | format_table
   printf "\n"
 
   # 3. Reverse Geoblocking Table
   printf "\033[1;97m3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
-  printf "  %-36s %s\n" "Сервис" "Статус"
-  printf "  %-36s %s\n" "------------------------------------" "------"
-  for row in "${ARR_RU_LOCAL[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    print_table_row "$name" "$val"
-  done
+  {
+    echo -e "  Сервис\tСтатус"
+    echo -e "  ------------------------------------\t------"
+    for row in "${ARR_RU_LOCAL[@]}"; do
+      IFS=$'\t' read -r name val <<<"$row"
+      echo -e "  $name\t$(format_value "$val")"
+    done
+  } | format_table
   printf "\n"
 
   # 4. Connectivity
   printf "\033[1;97m4. ⚡️ Связность по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
-  printf "  %-36s %s\n" "Регион / Тест" "Задержка / Скорость"
-  printf "  %-36s %s\n" "------------------------------------" "-------------------"
-  for row in "${ARR_CONNECTIVITY[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    print_table_row "$name" "$val"
-  done
+  {
+    echo -e "  Регион / Тест\tЗадержка / Скорость"
+    echo -e "  ------------------------------------\t-------------------"
+    for row in "${ARR_CONNECTIVITY[@]}"; do
+      IFS=$'\t' read -r name val <<<"$row"
+      echo -e "  $name\t$(format_value "$val")"
+    done
+  } | format_table
   printf "\n"
 
   # 5. Security
   printf "\033[1;97m5. 🛡 Безопасность периметра (Zero-Probing Check)\033[0m\n"
-  print_table_row "Порт 80/443 IP-Probe" "$NODE_ZERO_PROBE"
+  {
+    echo -e "  Порт 80/443 IP-Probe\t$(format_value "$NODE_ZERO_PROBE")"
+  } | format_table
   printf "\n"
 
   # 6. Final Verdict
@@ -1169,7 +1230,7 @@ main() {
   check_doh
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 1/5: Определение внешних IP и характеристик ноды...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 1/4: Определение внешних IP и параметров ноды...\033[0m\n" >&2
   fi
   discover_external_ips
 
@@ -1181,13 +1242,13 @@ main() {
 
   # 1. 18 GeoIP Databases
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 2/5: Опрос 18 GeoIP баз данных (параллельно)...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 2/4: Опрос 18 GeoIP баз данных (параллельно)...\033[0m\n" >&2
   fi
   run_geoip_consensus
 
   # 2. Western Services & RU Local Services
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 3/5: Проверка обхода цензуры и доступности сервисов РФ...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 3/4: Проверка обхода цензуры и доступности сервисов РФ...\033[0m\n" >&2
   fi
   ARR_RU_UNBLOCK+=( "Instagram (Meta)"$'\t'"$(lookup_instagram)" )
   ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(lookup_discord)" )
@@ -1209,6 +1270,10 @@ main() {
   ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(lookup_rutracker)" )
   ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(lookup_spotify_signup)" )
   ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(lookup_netflix)" )
+  ARR_RU_UNBLOCK+=( "Steam Store (Игры)"$'\t'"$(lookup_steam)" )
+  ARR_RU_UNBLOCK+=( "PlayStation Network"$'\t'"$(lookup_playstation)" )
+  ARR_RU_UNBLOCK+=( "Reddit"$'\t'"$(lookup_reddit)" )
+  ARR_RU_UNBLOCK+=( "Apple Services"$'\t'"$(lookup_apple)" )
 
   ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(lookup_gosuslugi)" )
   ARR_RU_LOCAL+=( "Яндекс (ya.ru)"$'\t'"$(lookup_yandex)" )
@@ -1221,14 +1286,9 @@ main() {
 
   # 3. Connectivity
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 4/5: Проверка связности по регионам РФ и iPerf3...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 4/4: Проверка связности по регионам РФ и iPerf3...\033[0m\n\n" >&2
   fi
   measure_ru_connectivity
-
-  # 4. Zero Probing
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 5/5: Аудит безопасности периметра (Zero-Probing)...\033[0m\n\n" >&2
-  fi
 
   print_results
 }
