@@ -155,16 +155,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
   Авито (avito.ru)                      Blocked (439 Qrator Captcha)
   Кинопоиск (kinopoisk.ru)              OK
 
-4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Speed)
-  Регион (Узел связи)                   Задержка (RTT)  Скорость (iPerf3)
-  ------------------------------------  --------------  -----------------
-  Москва (Центр, Hostkey / MSK-IX)      46.0 ms         484 Mbps
-  Санкт-Петербург (Северо-Запад, SPB)   59.9 ms         404 Mbps
-  Екатеринбург (Урал, ER-Telecom)       66.3 ms         324 Mbps
-  Новосибирск (Сибирь, ER-Telecom)      95.8 ms         141 Mbps
-  Ростов-на-Дону (Юг)                   64.6 ms         —
-  Казань (Поволжье)                     60.0 ms         —
-  Иркутск (Восточная Сибирь)            116.0 ms        —
+4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)
+  Регион (Узел связи)                   Задержка (RTT)  Скорость (↓ DL / ↑ UL)
+  ------------------------------------  --------------  -----------------------
+  Москва (Центр, Hostkey / MSK-IX)      27.6 ms         ↓ 295 / ↑ 273 Mbps
+  Санкт-Петербург (Северо-Запад, SPB)   16.0 ms         ↓ 225 / ↑ 843 Mbps
+  Казань (Поволжье, ER-Telecom)         35.9 ms         ↓ 191 / ↑ 643 Mbps
+  Ростов-на-Дону (Юг, ER-Telecom)       41.1 ms         ↓ 178 / ↑ 801 Mbps
+  Екатеринбург (Урал, ER-Telecom)       48.2 ms         ↓ 173 / ↑ 801 Mbps
+  Новосибирск (Сибирь, ER-Telecom)      72.9 ms         ↓ 76 / ↑ 602 Mbps
+  Иркутск (Восточная Сибирь, ER)        87.5 ms         ↓ 49 / ↑ 308 Mbps
 
 5. 🛡 Безопасность периметра (Zero-Probing Check)
   Порт 80/443 IP-Probe                  Protected (Drop/No SNI Leak)

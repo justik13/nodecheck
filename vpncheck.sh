@@ -107,6 +107,9 @@ bold() { printf "\033[%sm%s\033[%sm" "$COLOR_BOLD" "$1" "$COLOR_RESET"; }
 format_value() {
   local val="$1"
   case "$val" in
+    "—")
+      color "$COLOR_NULL" "—"
+      ;;
     ""|"null"|"$STATUS_NA")
       color "$COLOR_NULL" "$STATUS_NA"
       ;;
@@ -911,14 +914,39 @@ iperf_speed_test() {
   shift
   local ports=("$@")
   if [[ ${#ports[@]} -eq 0 ]]; then ports=(5201); fi
-  local res=""
+
   for p in "${ports[@]}"; do
-    res=$(timeout 3 iperf3 -c "$host" -p "$p" -t 1.5 -P 2 -J 2>/dev/null || echo "")
-    if [[ -n "$res" ]] && jq -e '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
-      jq -r '((.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0) / 1000000 | round | tostring) + " Mbps"' <<<"$res"
+    # 1. Try --bidir first (duplex test in ~1s)
+    local res
+    res=$(timeout 2.5 iperf3 -c "$host" -p "$p" -t 1 --bidir -J 2>/dev/null || echo "")
+    if [[ -n "$res" ]] && jq -e '.end.sum_sent_bidir_reverse.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
+      local tx_bps rx_bps dl ul
+      tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
+      rx_bps=$(jq -r '.end.sum_sent_bidir_reverse.bits_per_second // 0' <<<"$res")
+      dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+      ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+      echo "↓ $dl / ↑ $ul"
+      return
+    fi
+
+    # 2. If --bidir not supported (e.g. Hostkey), test TX (Download into RU) then RX with -R (Upload from RU)
+    res=$(timeout 2.5 iperf3 -c "$host" -p "$p" -t 1 -J 2>/dev/null || echo "")
+    if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
+      local tx_bps rx_bps dl="—" ul="—"
+      tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
+      dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+
+      local res_rx
+      res_rx=$(timeout 2.5 iperf3 -c "$host" -p "$p" -R -t 1 -J 2>/dev/null || echo "")
+      if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
+        rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
+        ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+      fi
+      echo "↓ $dl / ↑ $ul"
       return
     fi
   done
+
   echo "—"
 }
 
@@ -929,8 +957,8 @@ measure_ru_connectivity() {
   # Ping 7 macro-regions across Russia in parallel
   ( ping_host "spd-rudp.hostkey.ru" "$p_dir/msk" ) &
   ( ping_host "st.spb.ertelecom.ru" "$p_dir/spb" ) &
-  ( ping_host "st.rostov.ertelecom.ru" "$p_dir/rostov" ) &
   ( ping_host "st.kzn.ertelecom.ru" "$p_dir/kzn" ) &
+  ( ping_host "st.rostov.ertelecom.ru" "$p_dir/rostov" ) &
   ( ping_host "st.ekat.ertelecom.ru" "$p_dir/ekat" ) &
   ( ping_host "st.nsk.ertelecom.ru" "$p_dir/nsk" ) &
   ( ping_host "st.irkutsk.ertelecom.ru" "$p_dir/irk" ) &
@@ -938,29 +966,32 @@ measure_ru_connectivity() {
 
   RU_PING_MSK=$(<"$p_dir/msk")
   RU_PING_SPB=$(<"$p_dir/spb")
-  RU_PING_ROSTOV=$(<"$p_dir/rostov")
   RU_PING_KZN=$(<"$p_dir/kzn")
+  RU_PING_ROSTOV=$(<"$p_dir/rostov")
   RU_PING_EKAT=$(<"$p_dir/ekat")
   RU_PING_NSK=$(<"$p_dir/nsk")
   RU_PING_IRK=$(<"$p_dir/irk")
 
-  local s_msk="—" s_spb="—" s_ekat="—" s_nsk="—"
+  local s_msk="—" s_spb="—" s_kzn="—" s_rostov="—" s_ekat="—" s_nsk="—" s_irk="—"
   if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
-    s_msk=$(iperf_speed_test "spd-rudp.hostkey.ru" 5201 5202 5203 5204 5205)
-    s_spb=$(iperf_speed_test "st.spb.ertelecom.ru" 5201 5202 5203)
-    s_ekat=$(iperf_speed_test "st.ekat.ertelecom.ru" 5201 5202 5204)
-    s_nsk=$(iperf_speed_test "st.nsk.ertelecom.ru" 5201 5202 5203)
+    s_msk=$(iperf_speed_test "spd-rudp.hostkey.ru" 5202 5201 5203 5204 5205)
+    s_spb=$(iperf_speed_test "st.spb.ertelecom.ru" 5202 5201 5203 5204)
+    s_kzn=$(iperf_speed_test "st.kzn.ertelecom.ru" 5202 5201 5203 5204)
+    s_rostov=$(iperf_speed_test "st.rostov.ertelecom.ru" 5203 5201 5202 5204)
+    s_ekat=$(iperf_speed_test "st.ekat.ertelecom.ru" 5201 5202 5204 5205)
+    s_nsk=$(iperf_speed_test "st.nsk.ertelecom.ru" 5201 5202 5203 5204)
+    s_irk=$(iperf_speed_test "st.irkutsk.ertelecom.ru" 5202 5203 5204 5205)
   fi
 
   RU_IPERF_SPEED="$s_msk"
 
   ARR_CONNECTIVITY+=( "Москва (Центр, Hostkey / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"$s_msk" )
   ARR_CONNECTIVITY+=( "Санкт-Петербург (Северо-Запад, SPB)"$'\t'"$RU_PING_SPB"$'\t'"$s_spb" )
+  ARR_CONNECTIVITY+=( "Казань (Поволжье, ER-Telecom)"$'\t'"$RU_PING_KZN"$'\t'"$s_kzn" )
+  ARR_CONNECTIVITY+=( "Ростов-на-Дону (Юг, ER-Telecom)"$'\t'"$RU_PING_ROSTOV"$'\t'"$s_rostov" )
   ARR_CONNECTIVITY+=( "Екатеринбург (Урал, ER-Telecom)"$'\t'"$RU_PING_EKAT"$'\t'"$s_ekat" )
   ARR_CONNECTIVITY+=( "Новосибирск (Сибирь, ER-Telecom)"$'\t'"$RU_PING_NSK"$'\t'"$s_nsk" )
-  ARR_CONNECTIVITY+=( "Ростов-на-Дону (Юг)"$'\t'"$RU_PING_ROSTOV"$'\t'"—" )
-  ARR_CONNECTIVITY+=( "Казань (Поволжье)"$'\t'"$RU_PING_KZN"$'\t'"—" )
-  ARR_CONNECTIVITY+=( "Иркутск (Восточная Сибирь)"$'\t'"$RU_PING_IRK"$'\t'"—" )
+  ARR_CONNECTIVITY+=( "Иркутск (Восточная Сибирь, ER)"$'\t'"$RU_PING_IRK"$'\t'"$s_irk" )
 }
 
 # ------------------------------------------------------------------------------
@@ -1112,15 +1143,18 @@ print_results() {
   printf "\n"
 
   # 4. Connectivity
-  printf "\033[1;97m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Speed)\033[0m\n"
+  printf "\033[1;97m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
   {
-    echo -e "  Регион (Узел связи)\tЗадержка (RTT)\tСкорость (iPerf3)"
-    echo -e "  ------------------------------------\t--------------\t-----------------"
+    echo -e "  Регион (Узел связи)\tЗадержка (RTT)\tСкорость (↓ DL / ↑ UL)"
+    echo -e "  ------------------------------------\t--------------\t-----------------------"
     for row in "${ARR_CONNECTIVITY[@]}"; do
       IFS=$'\t' read -r name ping_val speed_val <<<"$row"
       echo -e "  $name\t$(format_value "$ping_val")\t$(format_value "$speed_val")"
     done
   } | format_table
+  if ! is_command_available "iperf3"; then
+    printf "  \033[0;90m* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n"
+  fi
   printf "\n"
 
   # 5. Security
@@ -1178,8 +1212,8 @@ print_verdict() {
 
   printf "   - Связность: Москва %s, СПб %s, Поволжье %s, Урал %s, Сибирь %s.\n" \
     "$RU_PING_MSK" "$RU_PING_SPB" "$RU_PING_KZN" "$RU_PING_EKAT" "$RU_PING_NSK"
-  if [[ -n "$RU_IPERF_SPEED" ]]; then
-    printf "   - Пропускная способность iPerf3: %s.\n" "$RU_IPERF_SPEED"
+  if [[ -n "$RU_IPERF_SPEED" && "$RU_IPERF_SPEED" != "—" ]]; then
+    printf "   - Пропускная способность iPerf3 (Москва): %s.\n" "$RU_IPERF_SPEED"
   fi
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
