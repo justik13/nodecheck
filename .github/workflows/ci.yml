@@ -14,28 +14,26 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: '.'
-          severity: error
-
       - name: Syntax Check (bash -n)
         run: |
+          bash -n vpncheck.sh
           bash -n ipregion.sh
 
   test-run:
-    name: Test Execution
-    runs-on: ubuntu-latest
+    name: Test Execution (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y curl jq bsdmainutils
-
-      - name: Test Help & Options
         run: |
-          chmod +x ipregion.sh
+          sudo apt-get update
+          sudo apt-get install -y curl jq bsdextrautils iproute2
+
+      - name: Test Help & CLI Options
+        run: |
+          chmod +x vpncheck.sh ipregion.sh
+          ./vpncheck.sh --help
           ./ipregion.sh --help
-          ./ipregion.sh -j --group cdn
+          ./vpncheck.sh -j

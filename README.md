@@ -1,233 +1,160 @@
-# 🌎 IPRegion (VPN Edition)
+# 🇷🇺 VPNCheck (RU Edition)
 
-> **Multi-source IP geolocation, streaming availability & VPN node quality auditor.**  
-> Комплексный скрипт для аудита VPN-нод, VPS, прокси и выходных узлов: определение типа IP (Residential vs Datacenter), оценка риска/фрода (Fraud Score), проверка Google Captcha, DoH-резолвер и проверка 45+ баз и сервисов.
+> **Комплексный аудитор годности, геолокации и сетевых ограничений VPN-нод для аудитории из РФ.**  
+> Создан для быстрой проверки VPS, VPN-серверов (VLESS / Reality / XHTTP / AmneziaWG / WireGuard) и прокси.
 
-Скрипт объединяет и развивает лучшие инженерные решения оригинального проекта [vernette/ipregion](https://github.com/vernette/ipregion) и форка [Davoyan/ipregion](https://github.com/Davoyan/ipregion), добавляя специализированный функционал для тестирования и оценки **VPN-нод**.
+[![CI](https://github.com/justik13/vpncheck/actions/workflows/ci.yml/badge.svg)](https://github.com/justik13/vpncheck/actions/workflows/ci.yml)
+[![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-## 🚀 Быстрый запуск (Quick Start)
+## ⚡️ Быстрый старт (Quick Start)
 
-### Локально через `curl` / `wget`
+Запуск в одну строку на любой Linux-машине (без предварительного скачивания):
+
 ```bash
-# Прямой запуск без предварительного скачивания
-bash <(curl -fsSL https://raw.githubusercontent.com/justik13/ipregion/main/ipregion.sh)
-
-# Или через wget:
-bash <(wget -qO- https://raw.githubusercontent.com/justik13/ipregion/main/ipregion.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh)
 ```
 
-### Аудит через SOCKS5 / Прокси (с разрешением DNS на стороне прокси)
+*Или через `wget`:*
 ```bash
-./ipregion.sh -p 127.0.0.1:1080
+bash <(wget -qO- https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh)
 ```
 
-### Аудит конкретного сетевого интерфейса (WireGuard / OpenVPN / VLESS)
+*С 3-секундным замером скорости `iPerf3` до Москвы:*
 ```bash
-./ipregion.sh -i wg0
-# или
-./ipregion.sh -i tun0
-```
-
-### В Docker
-```bash
-# С использованием хостовой сети (для одновременной проверки IPv4 и IPv6)
-docker run --rm --network=host justik13/ipregion:latest
-
-# Проверка через прокси внутри Docker
-docker run --rm justik13/ipregion:latest -p 10.0.0.1:1080
+bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh) -s
 ```
 
 ---
 
-## 🛡️ Что оценивается для VPN-ноды?
+## 🎯 Зачем это нужно для пользователей из РФ?
 
-| Метрика | Описание | Зачем это для VPN? |
-| :--- | :--- | :--- |
-| **Node Type** | Классификация: `Residential / ISP`, `Datacenter / Hosting`, `Mobile` или `Proxy` | Стриминги и антифрод-системы (банковские приложения, Google, Amazon) блокируют `Datacenter`. Чистый `Residential` — признак идеальной ноды. |
-| **Fraud / Risk Score** | Оценка чистоты IP по шкале `0-100` | Чем ниже оценка (0-25), тем меньше вероятность столкнуться с Cloudflare Challenge, капчами и блокировками. |
-| **Google Captcha** | Проверка триггера "Unusual traffic from your computer network" | Показывает, заспамлена ли подсеть хостинга ботами/скрейперами. |
-| **Country Consensus (%)** | Процентное совпадение геолокации по всем базам | Выявляет **Split Geo** (когда для RIPE IP в Германии, а Google и Netflix видят Финляндию). |
-| **Streaming Unblock** | Проверка доступа: Netflix, Disney+, Amazon Prime, YouTube Premium, Spotify, Deezer | Полная проверка снятия гео-ограничений медиасервисов. |
-| **AI Availability** | Доступ к OpenAI ChatGPT и Google Gemini | Проверка доступности современных AI-моделей из текущего региона. |
-| **DNS-over-HTTPS (DoH)** | Автоматическое шифрование DNS через Cloudflare, Quad9, AdGuard | Исключает искажение результатов проверки провайдерскими DNS (DNS poisoning/заглушки в РФ/СНГ/Китае). |
+В российских реалиях оценка VPN-ноды кардинально отличается от западных тестов. Пользователю нужны ответы на два противоположных вопроса:
+
+1. **Открывает ли нода то, что заблокировано в РФ?**  
+   *(Instagram, Discord, Twitter/X, ChatGPT, Claude AI, YouTube без замедления, Rutracker).*
+2. **Не ломает ли нода то, что нужно внутри РФ?**  
+   *(Многие отечественные банки, Госуслуги и Авито блокируют доступ с зарубежных датацентров).*
 
 ---
 
-## 📊 Пример вывода (Output Example)
+## 📊 Что проверяет VPNCheck
+
+### 1. 🔓 Обход блокировок (Western Services)
+* **Instagram & Threads** (Meta) — доступность шлюзов и CDN.
+* **Discord** — проверка API-шлюза (`gateway.discord.gg`) и голосовых каналов (заблокирован в РФ).
+* **Twitter / X** — доступность `x.com`.
+* **AI-платформы:** OpenAI ChatGPT, Anthropic Claude (проверка на 403 Cloudflare бан), Google Gemini.
+* **Стриминг и медиа:** YouTube CDN (определение локации эджа, проверка на отсутствие троттлинга), Rutracker, Spotify Signup, Netflix.
+
+### 2. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
+* **Государственные сервисы:** Госуслуги (`gosuslugi.ru`).
+* **Поисковики и медиа:** Яндекс (`ya.ru` — проверка на появление SmartCaptcha), ВКонтакте (`vk.com`), Кинопоиск (`kinopoisk.ru`).
+* **Банки РФ:** СберБанк (`sberbank.ru`), Т-Банк (`tbank.ru`), ВТБ (`vtb.ru`).
+* **Доски объявлений:** Авито (`avito.ru` — проверка на GeeTest / Firewall Captcha 429).
+
+### 3. ⚡️ Связность с РФ (Latency & Throughput)
+* **Пинг до Москвы:** Замер RTT до ключевого узла обмена трафиком (`spd-rudp.hostkey.ru` / MSK-IX).
+* **Пинг до Санкт-Петербурга:** Замер RTT до Северо-Западного узла (`st.spb.ertelecom.ru` / SPB-IX).
+* **Сквозная скорость `iPerf3` (флаг `-s`):** Замер реальной пропускной способности канала между нодой и сервером в Москве на базе реестра `itdoginfo/russian-iperf3-servers`.
+
+### 4. 🛡 Качество IP и безопасность узла
+* **Антифрод и репутация:** Оценка Fraud Score по шкале `0–100` (Scamalytics / ipquery.io).
+* **Тип сети:** Определение `Residential / ISP` vs `Data Center / Hosting`.
+* **Google Captcha:** Проверка на срабатывание поисковой капчи Google (*«Необычный трафик»*).
+* **Сетевой стек:** Статус алгоритма TCP BBR, доступность UDP-трафика (для AmneziaWG и Hysteria 2), исходящий порт 25 (SMTP).
+* **Zero-Probing Check:** Проверка портов 80 и 443 на утечку доменного имени или SSL-сертификата сканерам РКН/Censys при прямом опросе по IP.
+
+---
+
+## 🖥 Пример вывода
 
 ```text
 ================================================================================
- 🌎 IPRegion (VPN Edition) - Geolocation & Node Audit v2.1.0-vpn
+ 🇷🇺 VPNCheck (RU Edition) - VPN Node & Quality Auditor v3.0.0-ru
 ================================================================================
- IPv4:            198.51.100.42
- IPv6:            2001:db8::42
- ASN & ISP:       AS13335 (Cloudflare, Inc.)
- Node Type:       Datacenter / Hosting
- Fraud / Risk:    12/100 (Low Risk / Clean)
- Google Captcha:  No (Clean)
- DNS Resolver:    Active DoH (Encrypted DNS-over-HTTPS)
+ IPv4:              168.222.254.191
+ Локация / ASN:     DE (Frankfurt am Main) — AS198550 (NODE HOST LIMITED)
+ Тип хоста:         Residential / ISP
+ Антифрод / Риск:   Clean / Low Risk (0/100), Google Captcha: No
+ Сетевой стек:      BBR: Active | UDP: Open | Port 25: Open
 ================================================================================
 
-GeoIP Databases (18 sources)
+1. 🔓 Обход блокировок в РФ (Western Services)
+  Сервис                           Статус
+  -------------------------------- ------
+  Instagram                        Yes
+  Discord (Voice/Gateway)          Yes
+  Twitter / X                      Yes
+  OpenAI ChatGPT                   DE
+  Anthropic Claude AI              No (403 Cloudflare)
+  Google Gemini                    Yes
+  YouTube CDN                      Yes (FRA)
+  Rutracker                        Yes
+  Spotify Signup                   Yes
+  Netflix                          Yes
 
-Service          IPv4   IPv6
-MaxMind          US     US
-RIPE NCC         US     US
-IPinfo.io        US     US
-Ipregistry       US     US
-IP-API.co        US     US
-Cloudflare       US     US
-IP2Location.io   US     US
-IPLocation.com   US     US
-Country.is       US     US
-Geoapify         US     US
-GeoJS            US     US
-IPAPI.is         US     US
-ipbase.com       US     US
-ipquery.io       US     US
-ipwho.is         US     US
-ip-api.com       US     US
-2ip.io           US     US
-ifconfig.co      US     US
+2. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
+  Сервис                           Статус
+  -------------------------------- ------
+  Госуслуги (gosuslugi.ru)         OK
+  Яндекс (ya.ru)                   OK
+  ВКонтакте (vk.com)               OK
+  СберБанк (sberbank.ru)           Blocked (Timeout)
+  Т-Банк (tbank.ru)                Blocked (Timeout)
+  ВТБ (vtb.ru)                     Blocked (Timeout)
+  Авито (avito.ru)                 Blocked (Captcha/429)
+  Кинопоиск (kinopoisk.ru)         OK
 
-Web, Streaming & AI Services (24 services)
+3. ⚡️ Связность с РФ (Latency & Throughput)
+  Пинг Москва (MSK-IX / Hostkey)   45.968 ms
+  Пинг Санкт-Петербург (SPB-IX)    60.067 ms
+  iPerf3 Скорость до Москвы        653 Mbps
 
-Service                 IPv4   IPv6
-Google                  US     US
-Google Search Captcha   No     No
-YouTube                 US     US
-YouTube Premium         Yes    Yes
-YouTube Music           Yes    Yes
-ChatGPT                 US     US
-Gemini Supported        Yes    Yes
-Netflix                 US     US
-Disney+                 US     US
-Disney+ Access          Yes    Yes
-Amazon Prime            US     US
-Spotify                 US     US
-Spotify Signup          Yes    Yes
-Deezer                  US     US
-Apple                   US     US
-Microsoft Live          US     US
-Steam                   US     US
-PlayStation             US     US
-TikTok                  US     US
-Reddit                  US     US
-Reddit Guest Access     Yes    Yes
-Ookla Speedtest         US     US
-JetBrains               US     US
-Bing                    US     US
-
-CDN Edge Nodes
-
-Service          IPv4            IPv6
-Cloudflare CDN   Dallas, US (DFW) Dallas, US (DFW)
-YouTube CDN      Dallas, US (DFW) Dallas, US (DFW)
-Netflix CDN      US              US
-
-Country Consensus & Breakdown
-
-Code  Country        % IPv4  % IPv6
-US    United States  100%    100%
+4. 🛡 Безопасность периметра (Zero-Probing Check)
+  Порт 80/443 IP-Probe             Protected (Drop/No SNI Leak)
 
 ================================================================================
- 🛡️  VPN Node Quality Assessment
+ ⚖️  Вердикт пригодности для аудитории РФ
 ================================================================================
- • Primary Geolocation:      United States [US] (100% agreement)
- • Host Classification:      Datacenter / Hosting
- • Risk & Captcha Status:    12/100 (Low Risk / Clean), Google Captcha: No
- • Streaming Unblock:        5/5 key platforms unlocked
- • AI Platforms:             ChatGPT: Yes | Gemini: Yes
+ • Оценка ноды: 9.2 / 10 (ОТЛИЧНО)
+   - Зарубежные сервисы: Все ключевые блокировки обходятся (Instagram, Discord, X, AI, YouTube).
+   - ⚠️ Внимание: Зарубежный IP блокируется сервисами РФ: СберБанк, Т-Банк, ВТБ, Авито.
+   - Рекомендация: настройте Split-Tunneling (прямой обход для этих доменов).
+   - Связность: Пинг до Москвы 45.968 ms, BBR Active, UDP Open.
 ================================================================================
 ```
 
 ---
 
-## 📋 Поддерживаемые сервисы (45+)
+## ⚙️ Опции и параметры командной строки
 
-### 1. Базы данных GeoIP (18 сервисов)
-- **MaxMind** (GeoIP City)
-- **RIPE NCC** (Официальный региональный регистратор)
-- **IPinfo.io**
-- **Ipregistry**
-- **IP-API.co**
-- **Cloudflare** (Speed Meta)
-- **IP2Location.io**
-- **IPLocation.com**
-- **Country.is**
-- **Geoapify**
-- **GeoJS**
-- **IPAPI.is**
-- **ipbase.com**
-- **ipquery.io** (включая скоринг рисков)
-- **ipwho.is**
-- **ip-api.com** (Pro демо)
-- **2ip.io** (Популярный сервис проверки в СНГ)
-- **ifconfig.co**
-
-### 2. Веб-, AI- и стриминговые платформы (24 сервиса)
-- **Google** (Определение региона + поддержка Google CN)
-- **Google Search Captcha** (Детекция блокировки поиска и подозрительного трафика)
-- **YouTube** (Регион выдачи)
-- **YouTube Premium** (Доступность подписки в стране)
-- **YouTube Music** (Доступность сервиса)
-- **OpenAI ChatGPT** (Регион API Statsig)
-- **Google Gemini** (Официальная проверка поддерживаемых регионов CLDR/Gemini)
-- **Netflix** (Регион Fast.com)
-- **Disney+** & **Disney+ Access** (Определение региона и доступности стриминга через Bamgrid GraphQL)
-- **Amazon Prime Video** (Определение территории и блокировок `isServiceRestricted`)
-- **Spotify** & **Spotify Signup** (Регион и возможность регистрации нового аккаунта)
-- **Deezer** (Региональный прайсинг)
-- **Apple** (Apple Maps GCC)
-- **Microsoft Live** (`login.live.com`)
-- **Steam Store** (Валюта и страна магазина)
-- **PlayStation Network** (Cookie региона)
-- **TikTok** (Cookie Privacy API)
-- **Reddit** & **Reddit Guest Access** (OAuth локация и проверка сетевого бана)
-- **Ookla Speedtest** (SDK config)
-- **JetBrains** (Customer store location)
-- **Bing Search** (Региональная выдача)
-
-### 3. CDN и узлы доставки контента (3 сервиса)
-- **Cloudflare CDN** (Код аэропорта IATA + город)
-- **YouTube CDN** (Google Video redirector IATA)
-- **Netflix CDN** (Fast.com target location)
+| Опция | Описание |
+| :--- | :--- |
+| `-h`, `--help` | Показать справку по всем опциям |
+| `-s`, `--speed` | Выполнить быстрый 3-секундный замер скорости `iPerf3` до Москвы |
+| `-j`, `--json` | Вывод в чистом формате JSON (для интеграции в боты и мониторинг) |
+| `-p`, `--proxy ADDR` | Проверка ноды через локальный SOCKS5 (`127.0.0.1:1080`) |
+| `-i`, `--interface IF` | Привязка запросов к сетевому интерфейсу (`wg0`, `tun0`) |
+| `--no-doh` | Отключить DNS-over-HTTPS (использовать системный резолвер) |
+| `--doh PROVIDER` | Выбор провайдера DoH (`cloudflare`, `quad9`, `adguard`) |
+| `-v`, `--verbose` | Подробный вывод сетевых запросов |
 
 ---
 
-## ⚙️ Опции командной строки (CLI Flags)
+## 🐧 Поддержка Ubuntu 24.04 LTS (Noble Numbat)
 
-```text
-Параметры:
-  -h, --help               Показать справку и выйти
-  -v, --verbose            Включить подробный вывод логов
-  -d, --debug              Включить режим трассировки (лог в /tmp/ipregion_debug.log)
-  -j, --json               Вывести результат в чистом JSON-формате
-  -g, --group GROUP        Запустить определенную группу: 'primary', 'custom', 'cdn', 'all' (по умолчанию: all)
-  -t, --timeout SEC        Таймаут запросов в секундах (по умолчанию: 5)
-  -4, --ipv4               Проверять только IPv4
-  -6, --ipv6               Проверять только IPv6
-  -p, --proxy ADDR         SOCKS5/SOCKS5h прокси (формат: 127.0.0.1:1080)
-  -i, --interface IF       Сетевой интерфейс для привязки (например: eth0, wg0, tun0)
-  --no-doh                 Отключить DoH и использовать системный DNS
-  --doh PROVIDER           Выбрать DoH-провайдер: cloudflare, quad9, adguard, opendns
-```
-
----
-
-## 🛠️ Зависимости
-
-Скрипт автоматически определяет ОС и устанавливает недостающие пакеты при наличии `sudo`/`root`:
-* `bash`
-* `curl` (с поддержкой SSL)
-* `jq` (обработка JSON)
-* `util-linux` или `bsdmainutils` (утилита `column` для выравнивания таблиц; при отсутствии используется встроенный awk-форматтер)
-
-Поддерживаемые дистрибутивы: **Debian/Ubuntu, CentOS/RHEL, Fedora, Alpine Linux, Arch Linux, macOS (Homebrew)**.
+Скрипт оптимизирован под новейшие релизы Linux:
+* Корректно использует пакет `bsdextrautils` для форматирования таблиц (в Ubuntu 24 пакет `bsdmainutils` упразднён).
+* Имеет встроенный fallback на `awk` — работает даже на минимальных серверных образах без `column`.
+* Совместим с `systemd-resolved` и версиями `curl 8.5+`.
+* Время полного выполнения теста: **30–50 секунд**.
+* Не оставляет временных файлов (автоматическая очистка по `trap`).
 
 ---
 
 ## 📜 Лицензия
-MIT License. Разработано на базе наработок `vernette/ipregion` и `Davoyan/ipregion`.
+
+Распространяется под свободной лицензией [MIT](LICENSE).
