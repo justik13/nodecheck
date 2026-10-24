@@ -987,9 +987,9 @@ iperf_speed_test() {
   if [[ ${#ports[@]} -eq 0 ]]; then ports=(5201); fi
 
   for p in "${ports[@]}"; do
-    # 1. Try --bidir first (duplex test in ~1s)
+    # 1. Try --bidir first (duplex test in 2s)
     local res
-    res=$(timeout 2.5 iperf3 -c "$host" -p "$p" -t 1 --bidir -J 2>/dev/null || echo "")
+    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 --bidir -J 2>/dev/null || echo "")
     if [[ -n "$res" ]] && jq -e '.end.sum_sent_bidir_reverse.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
       local tx_bps rx_bps dl ul
       tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
@@ -1003,7 +1003,7 @@ iperf_speed_test() {
     fi
 
     # 2. If --bidir not supported (e.g. Hostkey), test TX (Download into RU) then RX with -R (Upload from RU)
-    res=$(timeout 2.5 iperf3 -c "$host" -p "$p" -t 1 -J 2>/dev/null || echo "")
+    res=$(timeout 3.5 iperf3 -c "$host" -p "$p" -t 2 -J 2>/dev/null || echo "")
     if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
       local tx_bps rx_bps dl="—" ul="—"
       tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
@@ -1011,7 +1011,7 @@ iperf_speed_test() {
         dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
 
         local res_rx
-        res_rx=$(timeout 2.5 iperf3 -c "$host" -p "$p" -R -t 1 -J 2>/dev/null || echo "")
+        res_rx=$(timeout 3.5 iperf3 -c "$host" -p "$p" -R -t 2 -J 2>/dev/null || echo "")
         if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
           rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
           ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
