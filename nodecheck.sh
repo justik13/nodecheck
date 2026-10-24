@@ -225,6 +225,12 @@ install_dependencies() {
   elif is_command_available "yum"; then
     yum install -y -q "${required_cmds[@]}" >/dev/null 2>&1 || true
   fi
+
+  for critical in curl jq; do
+    if ! is_command_available "$critical"; then
+      error_exit "Essential tool '$critical' is required but not installed. Run: sudo apt install -y $critical"
+    fi
+  done
 }
 
 check_doh() {
@@ -519,7 +525,11 @@ get_vpn_node_info() {
 
   # Check domain leak in TLS certificate CN/SAN
   if [[ "$p443" != "000" ]] && is_command_available openssl; then
-    p443_cert=$(echo | timeout 2 openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null || echo "")
+    if is_command_available timeout; then
+      p443_cert=$(echo | timeout 2 openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null || echo "")
+    else
+      p443_cert=$(echo | openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null || echo "")
+    fi
     if grep -oE '[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$p443_cert" | grep -qvE '(127\.0\.0\.1|localhost|local|example)'; then
       leak_found=true
     fi
