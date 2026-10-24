@@ -894,6 +894,77 @@ lookup_kinopoisk() {
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
 }
 
+run_services_check() {
+  local s_dir="$TMP_WORK_DIR/services"
+  mkdir -p "$s_dir"
+
+  # Parallel execution of 26 censorship and domestic checks
+  ( lookup_instagram > "$s_dir/instagram" ) &
+  ( lookup_discord > "$s_dir/discord" ) &
+  ( lookup_twitter_x > "$s_dir/twitter" ) &
+  ( lookup_chatgpt > "$s_dir/chatgpt" ) &
+  ( lookup_claude_ai > "$s_dir/claude" ) &
+  ( lookup_google > "$s_dir/google" ) &
+  ( lookup_gemini > "$s_dir/gemini" ) &
+  ( lookup_youtube > "$s_dir/youtube" ) &
+  ( lookup_youtube_cdn > "$s_dir/youtube_cdn" ) &
+  ( lookup_youtube_premium > "$s_dir/youtube_premium" ) &
+  ( lookup_youtube_music > "$s_dir/youtube_music" ) &
+  ( lookup_rutracker > "$s_dir/rutracker" ) &
+  ( lookup_spotify_signup > "$s_dir/spotify" ) &
+  ( lookup_netflix > "$s_dir/netflix" ) &
+  ( lookup_steam > "$s_dir/steam" ) &
+  ( lookup_playstation > "$s_dir/playstation" ) &
+  ( lookup_reddit > "$s_dir/reddit" ) &
+  ( lookup_apple > "$s_dir/apple" ) &
+
+  ( lookup_gosuslugi > "$s_dir/gosuslugi" ) &
+  ( lookup_yandex > "$s_dir/yandex" ) &
+  ( lookup_vk > "$s_dir/vk" ) &
+  ( lookup_sberbank > "$s_dir/sberbank" ) &
+  ( lookup_tbank > "$s_dir/tbank" ) &
+  ( lookup_vtb > "$s_dir/vtb" ) &
+  ( lookup_avito > "$s_dir/avito" ) &
+  ( lookup_kinopoisk > "$s_dir/kinopoisk" ) &
+
+  wait
+
+  local yt_res
+  yt_res=$(<"$s_dir/youtube")
+  YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
+  if [[ "$yt_res" == *"Без рекламы"* ]]; then
+    YOUTUBE_AD_FREE=true
+  fi
+
+  ARR_RU_UNBLOCK+=( "Instagram (Meta)"$'\t'"$(<"$s_dir/instagram")" )
+  ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(<"$s_dir/discord")" )
+  ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(<"$s_dir/twitter")" )
+  ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(<"$s_dir/chatgpt")" )
+  ARR_RU_UNBLOCK+=( "Anthropic Claude AI"$'\t'"$(<"$s_dir/claude")" )
+  ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(<"$s_dir/google")" )
+  ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(<"$s_dir/gemini")" )
+  ARR_RU_UNBLOCK+=( "YouTube"$'\t'"$yt_res" )
+  ARR_RU_UNBLOCK+=( "YouTube CDN"$'\t'"$(<"$s_dir/youtube_cdn")" )
+  ARR_RU_UNBLOCK+=( "YouTube Premium"$'\t'"$(<"$s_dir/youtube_premium")" )
+  ARR_RU_UNBLOCK+=( "YouTube Music"$'\t'"$(<"$s_dir/youtube_music")" )
+  ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(<"$s_dir/rutracker")" )
+  ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(<"$s_dir/spotify")" )
+  ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(<"$s_dir/netflix")" )
+  ARR_RU_UNBLOCK+=( "Steam Store (Игры)"$'\t'"$(<"$s_dir/steam")" )
+  ARR_RU_UNBLOCK+=( "PlayStation Network"$'\t'"$(<"$s_dir/playstation")" )
+  ARR_RU_UNBLOCK+=( "Reddit"$'\t'"$(<"$s_dir/reddit")" )
+  ARR_RU_UNBLOCK+=( "Apple Services"$'\t'"$(<"$s_dir/apple")" )
+
+  ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(<"$s_dir/gosuslugi")" )
+  ARR_RU_LOCAL+=( "Яндекс (ya.ru)"$'\t'"$(<"$s_dir/yandex")" )
+  ARR_RU_LOCAL+=( "ВКонтакте (vk.com)"$'\t'"$(<"$s_dir/vk")" )
+  ARR_RU_LOCAL+=( "СберБанк (sberbank.ru)"$'\t'"$(<"$s_dir/sberbank")" )
+  ARR_RU_LOCAL+=( "Т-Банк (tbank.ru)"$'\t'"$(<"$s_dir/tbank")" )
+  ARR_RU_LOCAL+=( "ВТБ (vtb.ru)"$'\t'"$(<"$s_dir/vtb")" )
+  ARR_RU_LOCAL+=( "Авито (avito.ru)"$'\t'"$(<"$s_dir/avito")" )
+  ARR_RU_LOCAL+=( "Кинопоиск (kinopoisk.ru)"$'\t'"$(<"$s_dir/kinopoisk")" )
+}
+
 # ------------------------------------------------------------------------------
 # 4. Multi-Region RU Connectivity & Speed
 # ------------------------------------------------------------------------------
@@ -923,10 +994,12 @@ iperf_speed_test() {
       local tx_bps rx_bps dl ul
       tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
       rx_bps=$(jq -r '.end.sum_sent_bidir_reverse.bits_per_second // 0' <<<"$res")
-      dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-      ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-      echo "↓ $dl / ↑ $ul"
-      return
+      if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+        dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+        ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+        echo "↓ $dl / ↑ $ul"
+        return
+      fi
     fi
 
     # 2. If --bidir not supported (e.g. Hostkey), test TX (Download into RU) then RX with -R (Upload from RU)
@@ -934,16 +1007,18 @@ iperf_speed_test() {
     if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
       local tx_bps rx_bps dl="—" ul="—"
       tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
-      dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+      if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+        dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
 
-      local res_rx
-      res_rx=$(timeout 2.5 iperf3 -c "$host" -p "$p" -R -t 1 -J 2>/dev/null || echo "")
-      if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
-        rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
-        ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+        local res_rx
+        res_rx=$(timeout 2.5 iperf3 -c "$host" -p "$p" -R -t 1 -J 2>/dev/null || echo "")
+        if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
+          rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
+          ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+        fi
+        echo "↓ $dl / ↑ $ul"
+        return
       fi
-      echo "↓ $dl / ↑ $ul"
-      return
     fi
   done
 
@@ -972,26 +1047,35 @@ measure_ru_connectivity() {
   RU_PING_NSK=$(<"$p_dir/nsk")
   RU_PING_IRK=$(<"$p_dir/irk")
 
-  local s_msk="—" s_spb="—" s_kzn="—" s_rostov="—" s_ekat="—" s_nsk="—" s_irk="—"
-  if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
-    s_msk=$(iperf_speed_test "spd-rudp.hostkey.ru" 5202 5201 5203 5204 5205)
-    s_spb=$(iperf_speed_test "st.spb.ertelecom.ru" 5202 5201 5203 5204)
-    s_kzn=$(iperf_speed_test "st.kzn.ertelecom.ru" 5202 5201 5203 5204)
-    s_rostov=$(iperf_speed_test "st.rostov.ertelecom.ru" 5203 5201 5202 5204)
-    s_ekat=$(iperf_speed_test "st.ekat.ertelecom.ru" 5201 5202 5204 5205)
-    s_nsk=$(iperf_speed_test "st.nsk.ertelecom.ru" 5201 5202 5203 5204)
-    s_irk=$(iperf_speed_test "st.irkutsk.ertelecom.ru" 5202 5203 5204 5205)
-  fi
+  test_region_speed() {
+    local label="$1" ping_val="$2" host="$3"
+    shift 3
+    local ports=("$@")
+    local speed="—"
 
-  RU_IPERF_SPEED="$s_msk"
+    if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
+      if [[ "$JSON_OUTPUT" != "true" ]]; then
+        printf "    \033[1;33m⏳\033[0m %s: %s | замер iPerf3...\r" "$label" "$ping_val" >&2
+      fi
+      speed=$(iperf_speed_test "$host" "${ports[@]}")
+    fi
 
-  ARR_CONNECTIVITY+=( "Москва (Центр, Hostkey / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"$s_msk" )
-  ARR_CONNECTIVITY+=( "Санкт-Петербург (Северо-Запад, SPB)"$'\t'"$RU_PING_SPB"$'\t'"$s_spb" )
-  ARR_CONNECTIVITY+=( "Казань (Поволжье, ER-Telecom)"$'\t'"$RU_PING_KZN"$'\t'"$s_kzn" )
-  ARR_CONNECTIVITY+=( "Ростов-на-Дону (Юг, ER-Telecom)"$'\t'"$RU_PING_ROSTOV"$'\t'"$s_rostov" )
-  ARR_CONNECTIVITY+=( "Екатеринбург (Урал, ER-Telecom)"$'\t'"$RU_PING_EKAT"$'\t'"$s_ekat" )
-  ARR_CONNECTIVITY+=( "Новосибирск (Сибирь, ER-Telecom)"$'\t'"$RU_PING_NSK"$'\t'"$s_nsk" )
-  ARR_CONNECTIVITY+=( "Иркутск (Восточная Сибирь, ER)"$'\t'"$RU_PING_IRK"$'\t'"$s_irk" )
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "    \033[1;32m✓\033[0m %s: \033[1;97m%s\033[0m | \033[1;36m%s\033[0m\033[K\n" "$label" "$ping_val" "$speed" >&2
+    fi
+
+    ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
+  }
+
+  test_region_speed "Москва (Центр, Hostkey / MSK-IX)" "$RU_PING_MSK" "spd-rudp.hostkey.ru" 5202 5201 5203 5204 5205
+  test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" 5202 5201 5203 5204
+  test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" 5202 5201 5203 5204
+  test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" 5203 5201 5202 5204
+  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" 5201 5202 5204 5205
+  test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" 5201 5202 5203 5204
+  test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" 5202 5203 5204 5205
+
+  IFS=$'\t' read -r _ _ RU_IPERF_SPEED <<<"${ARR_CONNECTIVITY[0]}"
 }
 
 # ------------------------------------------------------------------------------
@@ -1358,7 +1442,7 @@ main() {
   check_doh
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 1/4: Определение внешних IP и параметров ноды...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 1/4:\033[0m Определение параметров ноды...\n" >&2
   fi
   discover_external_ips
 
@@ -1368,56 +1452,43 @@ main() {
 
   get_vpn_node_info
 
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "    \033[1;32m✓\033[0m Нода: \033[1;97m%s\033[0m (%s) | %s | BBR: %s | Port 25: %s\n" \
+      "${EXTERNAL_IPV4:-$EXTERNAL_IPV6}" "${NODE_COUNTRY_CODE:-??}" "${NODE_ISP:-ISP}" "$NODE_BBR_STATUS" "$NODE_PORT25_STATUS" >&2
+  fi
+
   # 1. 18 GeoIP Databases
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 2/4: Опрос 18 GeoIP баз данных (параллельно)...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 2/4:\033[0m Опрос 18 GeoIP баз данных (параллельно)...\n" >&2
   fi
   run_geoip_consensus
 
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "    \033[1;32m✓\033[0m 18 GeoIP баз данных опрошены\n" >&2
+  fi
+
   # 2. Western Services & RU Local Services
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 3/4: Проверка обхода цензуры и доступности сервисов РФ...\033[0m\n" >&2
+    printf "\033[1;36m[*] Шаг 3/4:\033[0m Проверка 26 сервисов обхода цензуры и Рунета (параллельно)...\n" >&2
   fi
-  ARR_RU_UNBLOCK+=( "Instagram (Meta)"$'\t'"$(lookup_instagram)" )
-  ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(lookup_discord)" )
-  ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(lookup_twitter_x)" )
-  ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(lookup_chatgpt)" )
-  ARR_RU_UNBLOCK+=( "Anthropic Claude AI"$'\t'"$(lookup_claude_ai)" )
-  ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(lookup_google)" )
-  ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(lookup_gemini)" )
-  local yt_res
-  yt_res=$(lookup_youtube)
-  YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
-  if [[ "$yt_res" == *"Без рекламы"* ]]; then
-    YOUTUBE_AD_FREE=true
-  fi
-  ARR_RU_UNBLOCK+=( "YouTube"$'\t'"$yt_res" )
-  ARR_RU_UNBLOCK+=( "YouTube CDN"$'\t'"$(lookup_youtube_cdn)" )
-  ARR_RU_UNBLOCK+=( "YouTube Premium"$'\t'"$(lookup_youtube_premium)" )
-  ARR_RU_UNBLOCK+=( "YouTube Music"$'\t'"$(lookup_youtube_music)" )
-  ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(lookup_rutracker)" )
-  ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(lookup_spotify_signup)" )
-  ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(lookup_netflix)" )
-  ARR_RU_UNBLOCK+=( "Steam Store (Игры)"$'\t'"$(lookup_steam)" )
-  ARR_RU_UNBLOCK+=( "PlayStation Network"$'\t'"$(lookup_playstation)" )
-  ARR_RU_UNBLOCK+=( "Reddit"$'\t'"$(lookup_reddit)" )
-  ARR_RU_UNBLOCK+=( "Apple Services"$'\t'"$(lookup_apple)" )
+  run_services_check
 
-  ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(lookup_gosuslugi)" )
-  ARR_RU_LOCAL+=( "Яндекс (ya.ru)"$'\t'"$(lookup_yandex)" )
-  ARR_RU_LOCAL+=( "ВКонтакте (vk.com)"$'\t'"$(lookup_vk)" )
-  ARR_RU_LOCAL+=( "СберБанк (sberbank.ru)"$'\t'"$(lookup_sberbank)" )
-  ARR_RU_LOCAL+=( "Т-Банк (tbank.ru)"$'\t'"$(lookup_tbank)" )
-  ARR_RU_LOCAL+=( "ВТБ (vtb.ru)"$'\t'"$(lookup_vtb)" )
-  ARR_RU_LOCAL+=( "Авито (avito.ru)"$'\t'"$(lookup_avito)" )
-  ARR_RU_LOCAL+=( "Кинопоиск (kinopoisk.ru)"$'\t'"$(lookup_kinopoisk)" )
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    local unblock_ok=0
+    for row in "${ARR_RU_UNBLOCK[@]}"; do
+      IFS=$'\t' read -r _ val <<<"$row"
+      if [[ "$val" != "No"* ]]; then unblock_ok=$((unblock_ok + 1)); fi
+    done
+    printf "    \033[1;32m✓\033[0m Сервисы: \033[1;97m%d/18\033[0m зарубежных открыты | Рунет проверен\n" "$unblock_ok" >&2
+  fi
 
   # 3. Connectivity
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 4/4: Проверка связности по регионам РФ и iPerf3...\033[0m\n\n" >&2
+    printf "\033[1;36m[*] Шаг 4/4:\033[0m Замер связности и скорости по 7 регионам РФ (в реальном времени):\n" >&2
   fi
   measure_ru_connectivity
 
+  printf "\n"
   print_results
 }
 
