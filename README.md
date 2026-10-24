@@ -1,7 +1,6 @@
-# 🇷🇺 VPNCheck (RU Edition)
+# VPNCheck (RU Edition)
 
-> **Комплексный высокоскоростной аудитор годности, геолокации и сетевых ограничений VPN-нод для аудитории из РФ.**  
-> Создан для быстрой и глубокой проверки VPS, VPN-серверов (VLESS / Reality / XHTTP / AmneziaWG / WireGuard) и прокси под реалии Рунета (ТСПУ / Reverse Geoblocking).
+Скрипт проверки VPS и VPN-нод под Рунет: сверка по 18 базам GeoIP, обход блокировок, доступность сервисов РФ и связность с 7 макрорегионами.
 
 [![CI](https://github.com/justik13/vpncheck/actions/workflows/ci.yml/badge.svg)](https://github.com/justik13/vpncheck/actions/workflows/ci.yml)
 [![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
@@ -9,83 +8,77 @@
 
 ---
 
-## ⚡️ Быстрый запуск в 1 строку (One-Liner)
+## Быстрый запуск
 
-Запуск на любой Linux-машине (без установки, результат через ~30 секунд):
+Запуск одной командой без предварительной установки (время работы ~30 секунд):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh)
 ```
 
-*Или через `wget`:*
+Через `wget`:
 ```bash
 bash <(wget -qO- https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh)
 ```
 
-*Без замера пропускной способности `iPerf3` (только пинг):*
+Без замера скорости через iPerf3 (только пинг):
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpncheck.sh) --no-iperf
 ```
 
 ---
 
-## 🎯 Зачем это нужно для пользователей из РФ?
+## Назначение
 
-При развёртывании VPN для пользователей из России критически важно проверить два противоположных фактора:
+При настройке VPN-сервера для пользователей в РФ нужно контролировать четыре вещи:
 
-1. **Обход блокировок РКН/ТСПУ (Зарубежные сервисы):**
-   * Доступны ли Instagram, Discord (включая голосовой шлюз), Twitter/X, ChatGPT, Claude AI, Rutracker?
-   * Нет ли троттлинга YouTube и как определяется регион?
-   * **Показ YouTube без рекламы:** входит ли страна IP-адреса в список регионов без монетизации (Албания `AL`, Россия `RU`, Молдова `MD`, Монголия `MN`, Мьянма `MM`, Камбоджа `KH`)? При совпадении нода помечается бейджем `[Без рекламы 🎬]`.
-2. **Доступность Рунета (Reverse Geoblocking):**
-   * Не блокируют ли зарубежный IP российские банки (Сбер, Т-Банк, ВТБ), Госуслуги и Авито? Если блокируют — скрипт выдаёт точный вердикт и рекомендацию настроить Split-Tunneling.
-3. **Реальная связность со всей Россией:**
-   * Россия — это не только Москва. Скрипт замеряет RTT до 7 ключевых макрорегионов РФ (Центр, Северо-Запад, Юг, Поволжье, Урал, Сибирь, Дальний Восток) и сквозную скорость `iPerf3` на серверах из базы `itdoginfo/russian-iperf3-servers`.
-4. **Консенсус 18 баз данных GeoIP:**
-   * Сверка геолокации IP по 18 независимым базам (MaxMind, IPinfo, Cloudflare, IP-API, RIPE, 2ip и др.) с подсчётом процента совпадения и распределения.
+1. **Обход блокировок РКН и ТСПУ:** доступность Instagram, Discord (включая шлюз голосовых каналов), Twitter/X, ChatGPT, Claude, Rutracker и региональных зон Google.
+2. **YouTube без рекламы:** входит ли страна IP в список регионов без монетизации (Албания `AL`, Россия `RU`, Молдова `MD`, Монголия `MN`, Мьянма `MM`, Камбоджа `KH`). Нода помечается отметкой `[Без рекламы 🎬]`.
+3. **Обратный геобондинг (Reverse Geoblocking):** открываются ли Госуслуги, Авито и российские банки (Сбер, Т-Банк, ВТБ). Если банк или сервис режет зарубежные адреса, скрипт указывает на необходимость Split-Tunneling.
+4. **Связность и маршрутизация по РФ:** замер сетевой задержки до 7 узлов (Москва, Санкт-Петербург, Ростов-на-Дону, Казань, Екатеринбург, Новосибирск, Иркутск) и замер скорости через iPerf3.
 
 ---
 
-## 📊 Что проверяет VPNCheck
+## Проверки
 
-### 1. 🌐 Консенсус 18 GeoIP баз данных
+### 1. Консенсус 18 баз GeoIP
 * IPinfo.io, IP-API.com, Cloudflare (Trace), IP.SB, Ipregistry, IP-API.co, IP2Location.io, Country.is, GeoJS, 2ip.io, ipwho.is, ifconfig.co, IPLocation.net, ipbase.com, ipquery.io, IPAPI.is, RIPE NCC, IP.Guide.
-* Отображение таблицы стран, процента согласия (Consensus Agreement) и отсортированной таблицы распределения долей.
+* Параллельный опрос, процент согласия баз и отсортированное распределение стран.
 
-### 2. 🔓 Обход блокировок (Western Services)
-* **Instagram & Threads (Meta)** — проверка веб-шлюза и доступности контента.
-* **Discord** — проверка API-шлюза (`gateway.discord.gg`) и голосовой инфраструктуры.
-* **Twitter / X** — доступность `x.com`.
-* **AI-платформы:** OpenAI ChatGPT, Anthropic Claude (проверка на 403 Cloudflare бан), Google Gemini.
-* **Google & YouTube:** Строгая проверка региона аккаунта Google (GlifSetupAndroid), детекция региона YouTube с бейджем `[Без рекламы 🎬]`, YouTube CDN (код аэропорта IATA), YouTube Premium и YouTube Music.
-* **Медиа, игры и стриминг:** Rutracker, Spotify Signup, Netflix, Steam Store, PlayStation Network, Reddit, Apple Services.
+### 2. Зарубежные сервисы
+* **Instagram и Threads (Meta):** доступность веб-шлюза и контента.
+* **Discord:** проверка шлюза `gateway.discord.gg`.
+* **Twitter / X:** доступность `x.com`.
+* **Нейросети:** OpenAI ChatGPT (с валидацией поддержки региона), Anthropic Claude, Google Gemini.
+* **Google и YouTube:** регион аккаунта (GlifSetupAndroid), детекция отсутствия рекламы, YouTube CDN (IATA-код аэропорта), YouTube Premium, YouTube Music.
+* **Игры и стриминг:** Spotify Signup, Steam Store, PlayStation Network, Netflix, Rutracker, Reddit, Apple Services.
 
-### 3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
+### 3. Доступность сервисов РФ
 * **Госуслуги:** `gosuslugi.ru`.
-* **Поисковики и медиа:** Яндекс (`ya.ru` — детекция SmartCaptcha), ВКонтакте (`vk.com`), Кинопоиск (`kinopoisk.ru`).
-* **Банки РФ:** СберБанк (`sberbank.ru`), Т-Банк (`tbank.ru`), ВТБ (`vtb.ru`).
-* **Доски объявлений:** Авито (`avito.ru` — проверка на GeeTest / 429 Firewall).
+* **Поисковики и медиа:** Яндекс (`ya.ru`, проверка на SmartCaptcha), ВКонтакте (`vk.com`), Кинопоиск (`kinopoisk.ru`).
+* **Банки:** СберБанк, Т-Банк, ВТБ (проверка доступности с поддержкой сертификатов Минцифры).
+* **Классифайды:** Авито (`avito.ru`, проверка на Qrator / капчу).
 
-### 4. ⚡️ Связность по всей России (Multi-Region Latency & iPerf3)
-* **Москва (Центр, MSK-IX / Hostkey)**
-* **Санкт-Петербург (Северо-Запад, SPB-IX)**
-* **Ростов-на-Дону (Юг, ER-Telecom)**
-* **Казань (Поволжье, ER-Telecom)**
-* **Екатеринбург (Урал, ER-Telecom)**
-* **Новосибирск (Сибирь, ER-Telecom)**
-* **Иркутск (Восточная Сибирь, ER-Telecom)**
-* **iPerf3 Скорость до Москвы:** 3-секундный параллельный замер реальной пропускной способности (10G порт).
+### 4. Связность по регионам РФ
+* Москва (Центр, MSK-IX / Hostkey)
+* Санкт-Петербург (Северо-Запад, SPB-IX)
+* Ростов-на-Дону (Юг, ER-Telecom)
+* Казань (Поволжье, ER-Telecom)
+* Екатеринбург (Урал, ER-Telecom)
+* Новосибирск (Сибирь, ER-Telecom)
+* Иркутск (Восточная Сибирь, ER-Telecom)
+* Скорость iPerf3 до Москвы (порт 10G, 3-секундный параллельный замер).
 
-### 5. 🛡 Качество IP и безопасность периметра
-* **Антифрод и репутация:** Оценка Fraud Score от 0 до 100 (Clean / Moderate / High Risk).
-* **Тип ноды:** Определение `Residential / ISP` vs `Data Center / Hosting`.
-* **Google Captcha:** Проверка на срабатывание поисковой капчи Google (*«Необычный трафик»*).
-* **Сетевой стек:** Статус TCP BBR, открытость UDP (для AmneziaWG / Hysteria 2), исходящий порт 25 (SMTP).
-* **Zero-Probing Check:** Проверка портов 80 и 443 на утечку SNI / Default VHost сканерам ТСПУ/РКН.
+### 5. Качество IP и периметр
+* **Антифрод:** Fraud Score от 0 до 100 через ipquery.io.
+* **Тип адреса:** Residential / ISP либо Data Center / Hosting.
+* **Google Captcha:** проверка на выдачу капчи «Необычный трафик».
+* **Сетевой стек:** статус TCP BBR, открытость UDP для AmneziaWG / Hysteria 2, исходящий SMTP-порт 25.
+* **Zero-Probing:** проверка локальных портов 80 и 443 на утечку SNI сканерам ТСПУ.
 
 ---
 
-## 🖥 Пример вывода
+## Пример вывода
 
 ```text
 ================================================================================
@@ -135,11 +128,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
   Discord (Voice/Gateway)               Yes
   Twitter / X                           Yes
   OpenAI ChatGPT                        DE
-  Anthropic Claude AI                   No (403 Cloudflare)
+  Anthropic Claude AI                   No (403 Cloudflare Challenge)
   Google (Регион)                       GB
   Google Gemini                         Yes (GB)
   YouTube                               GB
-  YouTube CDN                           Yes (VMC)
+  YouTube CDN                           Yes (FRA)
   YouTube Premium                       Yes
   YouTube Music                         Yes
   Rutracker                             Yes
@@ -156,33 +149,32 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
   Госуслуги (gosuslugi.ru)              OK
   Яндекс (ya.ru)                        OK
   ВКонтакте (vk.com)                    OK
-  СберБанк (sberbank.ru)                Blocked (Timeout)
-  Т-Банк (tbank.ru)                     Blocked (Timeout)
-  ВТБ (vtb.ru)                          Blocked (Timeout)
-  Авито (avito.ru)                      OK
+  СберБанк (sberbank.ru)                OK
+  Т-Банк (tbank.ru)                     OK
+  ВТБ (vtb.ru)                          Blocked (403 Geoblock)
+  Авито (avito.ru)                      Blocked (439 Qrator Captcha)
   Кинопоиск (kinopoisk.ru)              OK
 
-4. ⚡️ Связность по регионам РФ (Multi-Region Latency & Throughput)
-  Регион / Тест                         Задержка / Скорость
-  ------------------------------------  -------------------
-  Москва (Центр, MSK-IX)                45.9 ms
-  Санкт-Петербург (Северо-Запад)        59.9 ms
-  Ростов-на-Дону (Юг)                   64.4 ms
-  Казань (Поволжье)                     60.0 ms
-  Екатеринбург (Урал)                   66.4 ms
-  Новосибирск (Сибирь)                  95.7 ms
-  Иркутск (Восточная Сибирь)            116.0 ms
-  iPerf3 Скорость до Москвы (10G Port)  740 Mbps
+4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Speed)
+  Регион (Узел связи)                   Задержка (RTT)  Скорость (iPerf3)
+  ------------------------------------  --------------  -----------------
+  Москва (Центр, Hostkey / MSK-IX)      46.0 ms         484 Mbps
+  Санкт-Петербург (Северо-Запад, SPB)   59.9 ms         404 Mbps
+  Екатеринбург (Урал, ER-Telecom)       66.3 ms         324 Mbps
+  Новосибирск (Сибирь, ER-Telecom)      95.8 ms         141 Mbps
+  Ростов-на-Дону (Юг)                   64.6 ms         —
+  Казань (Поволжье)                     60.0 ms         —
+  Иркутск (Восточная Сибирь)            116.0 ms        —
 
 5. 🛡 Безопасность периметра (Zero-Probing Check)
-  Порт 80/443 IP-Probe                  Normal
+  Порт 80/443 IP-Probe                  Protected (Drop/No SNI Leak)
 
 ================================================================================
  ⚖️  Вердикт пригодности ноды для РФ аудитории
 ================================================================================
- • Оценка ноды: 9.3 / 10 (ОТЛИЧНО ДЛЯ VPN)
+ • Оценка ноды: 8.5 / 10 (ХОРОШО ДЛЯ VPN)
    - Зарубежные сервисы: Обход блокировок функционирует (17/18 сервисов доступно).
-   - ⚠️ Внимание: Зарубежный IP блокируется сервисами РФ: СберБанк (sberbank.ru), Т-Банк (tbank.ru), ВТБ (vtb.ru).
+   - Внимание: Зарубежный IP блокируется сервисами РФ: ВТБ (vtb.ru), Авито (avito.ru).
    - Рекомендация: настройте Split-Tunneling (прямой маршрут без VPN для этих доменов).
    - Связность: Москва 45.9 ms, СПб 59.9 ms, Поволжье 60.0 ms, Урал 66.4 ms, Сибирь 95.7 ms.
    - Пропускная способность iPerf3: 740 Mbps.
@@ -191,30 +183,31 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/vpncheck/main/vpnch
 
 ---
 
-## ⚙️ Опции командной строки
+## Опции
 
 | Опция | Описание |
 | :--- | :--- |
-| `-h`, `--help` | Показать справку по всем опциям |
+| `-h`, `--help` | Справка по всем опциям |
 | `--no-iperf` | Пропустить замер скорости iPerf3 (только пинг) |
-| `-j`, `--json` | Вывод в чистом формате JSON (для интеграции в боты и мониторинг) |
-| `-p`, `--proxy ADDR` | Проверка ноды через локальный SOCKS5 (`127.0.0.1:1080`) |
-| `-i`, `--interface IF` | Привязка запросов к сетевому интерфейсу (`wg0`, `tun0`) |
-| `--no-doh` | Отключить DNS-over-HTTPS (использовать системный резолвер) |
-| `--doh PROVIDER` | Выбор провайдера DoH (`cloudflare`, `quad9`, `adguard`) |
-| `-v`, `--verbose` | Подробный вывод сетевых запросов |
+| `-j`, `--json` | Вывод в формате JSON (для ботов и мониторинга) |
+| `-p`, `--proxy ADDR` | Проверка ноды через SOCKS5 (`127.0.0.1:1080`) |
+| `-i`, `--interface IF` | Привязка запросов к интерфейсу (`wg0`, `tun0`) |
+| `--no-doh` | Отключить DNS-over-HTTPS (системный резолвер) |
+| `--doh PROVIDER` | Провайдер DoH (`cloudflare`, `quad9`, `adguard`) |
+| `-v`, `--verbose` | Логирование сетевых запросов |
 
 ---
 
-## 🐧 Поддержка Linux (Ubuntu 24.04 Noble Numbat)
+## Совместимость и требования
 
-* 100% нативный bash без сторонних интерпретаторов.
-* Полная совместимость с Ubuntu 24.04 LTS (`bsdextrautils` + `awk` fallback).
-* Время полного теста: **~25–35 секунд**.
-* Чистый запуск: временные файлы в `/tmp` изолированы и гарантированно удаляются через `trap ... EXIT INT TERM`.
+* **ОС:** Linux (тестировалось на Ubuntu 24.04 Noble Numbat).
+* **Стек:** чистый Bash без Python и Node.js.
+* **Утилиты:** `curl`, `jq`, `ping` (`iputils-ping`), `awk`, `column` (`bsdextrautils`), `iperf3`.
+* **Безопасность:** скрипт не меняет настройки системы, временные файлы хранятся в изолированном каталоге `/tmp/vpncheck.XXXXXX` и гарантированно удаляются по триггеру `trap EXIT INT TERM`.
+* **Время выполнения:** ~25–35 секунд.
 
 ---
 
-## 📜 Лицензия
+## Лицензия
 
-Распространяется под свободной лицензией [MIT](LICENSE).
+[MIT](LICENSE)

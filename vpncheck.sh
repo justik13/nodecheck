@@ -14,7 +14,7 @@ set -o pipefail
 SCRIPT_VERSION="3.1.0-ru"
 
 CURL_TIMEOUT=4
-CURL_RETRIES=1
+CURL_RETRIES=0
 VERBOSE=false
 DEBUG=false
 JSON_OUTPUT=false
@@ -110,16 +110,16 @@ format_value() {
     ""|"null"|"$STATUS_NA")
       color "$COLOR_NULL" "$STATUS_NA"
       ;;
-    "Yes"|"OK"|"Clean"|"No"|"Protected"|"Active"|"Open"|"True"|"true")
+    "Yes"*|"OK"*|"Clean"*|"Active"|"Open"|"True"|"true"|*"Protected"*)
       color "1;32" "$val"
       ;;
     *"[Без рекламы"*|*"Без рекламы"*)
       color "1;32" "$val"
       ;;
-    *"Captcha"*|*"Blocked"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*)
+    "No"*|*"Captcha"*|*"Blocked"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*)
       color "1;31" "$val"
       ;;
-    *"Rate limited"*|*"Server error"*|*"Moderate"*)
+    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*)
       color "1;33" "$val"
       ;;
     *)
@@ -241,7 +241,7 @@ curl_wrapper() {
     esac
   done
 
-  local curl_cmd=(curl -sS -L --max-time "$timeout" --retry "$CURL_RETRIES" --retry-delay 0)
+  local curl_cmd=(curl -sS -L --connect-timeout 2 --max-time "$timeout" --retry "$CURL_RETRIES" --retry-delay 0)
   curl_cmd+=(-A "$USER_AGENT")
 
   if [[ "$ip_version" == "4" ]]; then
@@ -376,8 +376,10 @@ get_vpn_node_info() {
     NODE_BBR_STATUS="Inactive"
   fi
 
-  # Port 25 Outbound
-  if nc -z -w 2 smtp.gmail.com 25 2>/dev/null; then
+  # Port 25 Outbound (native bash /dev/tcp with nc fallback)
+  if timeout 2 bash -c 'echo > /dev/tcp/smtp.gmail.com/25' 2>/dev/null; then
+    NODE_PORT25_STATUS="Open"
+  elif is_command_available nc && nc -z -w 2 smtp.gmail.com 25 2>/dev/null; then
     NODE_PORT25_STATUS="Open"
   else
     NODE_PORT25_STATUS="Blocked"
@@ -583,12 +585,17 @@ lookup_twitter_x() {
 }
 
 lookup_claude_ai() {
-  local code
+  local code resp
   code=$(curl_http_code "https://claude.ai")
+  resp=$(curl_wrapper GET "https://claude.ai" --timeout 3 2>/dev/null)
   if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
     echo "Yes"
   elif [[ "$code" == "403" ]]; then
-    echo "No (403 Cloudflare)"
+    if [[ "$resp" == *"cf-mitigated"* || "$resp" == *"challenges.cloudflare.com"* || "$resp" == *"Just a moment"* ]]; then
+      echo "No (403 Cloudflare Challenge)"
+    else
+      echo "No (403 Region Blocked)"
+    fi
   else
     echo "No ($code)"
   fi
@@ -605,8 +612,25 @@ lookup_chatgpt() {
   resp=$(curl_wrapper POST "https://ab.chatgpt.com/v1/initialize" --ip-version "4" \
     --header "Statsig-Api-Key: $CHATGPT_STATSIG_API_KEY" --header "Content-Type: application/json" --data '{}' 2>/dev/null)
   local cc
-  cc=$(jq -r '.derived_fields.country // empty' <<<"$resp")
-  if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
+  cc=$(jq -r '.derived_fields.country // empty' <<<"$resp" 2>/dev/null)
+  if [[ -n "$cc" ]]; then
+    case "$cc" in
+      RU|CN|IR|KP|CU|SY)
+        echo "No ($cc - Unsupported)"
+        ;;
+      *)
+        echo "$cc"
+        ;;
+    esac
+  else
+    local code
+    code=$(curl_http_code "https://chatgpt.com")
+    if [[ "$code" =~ ^(200|301|302)$ ]]; then
+      echo "Yes"
+    else
+      echo "No ($code)"
+    fi
+  fi
 }
 
 lookup_google() {
@@ -625,21 +649,34 @@ lookup_google() {
 lookup_gemini() {
   local g_cc
   g_cc=$(lookup_google)
+  if [[ -z "$g_cc" ]]; then
+    local code
+    code=$(curl_http_code "https://gemini.google.com")
+    if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+    return
+  fi
+
   local regions
   regions=$(curl_wrapper GET "$GEMINI_REGIONS_URL" --timeout 3 2>/dev/null)
   local country_name="${COUNTRY_NAMES[$g_cc]:-}"
 
-  if [[ -n "$country_name" ]] && grep -qi "$country_name" <<<"$regions"; then
+  if [[ -n "$country_name" ]] && grep -qi "^- ${country_name}$" <<<"$regions"; then
     echo "Yes ($g_cc)"
-  elif [[ -n "$g_cc" ]]; then
-    echo "Yes ($g_cc)"
+  elif [[ -n "$regions" ]]; then
+    echo "No ($g_cc - Region blocked)"
   else
-    echo "Yes"
+    echo "Yes ($g_cc)"
   fi
 }
 
 lookup_youtube() {
-  local resp cc=""
+  local code resp cc=""
+  code=$(curl_http_code "https://www.youtube.com")
+  if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
+    echo "No ($code)"
+    return
+  fi
+
   # Method 1: sw.js_data
   resp=$(curl_wrapper GET "https://www.youtube.com/sw.js_data" 2>/dev/null)
   cc=$(tail -n +3 <<<"$resp" | jq -r '.[0][2][0][0][1]' 2>/dev/null || echo "")
@@ -669,10 +706,18 @@ lookup_youtube() {
 }
 
 lookup_youtube_cdn() {
-  local resp
+  local resp code
+  code=$(curl_http_code "https://redirector.googlevideo.com/report_mapping")
+  if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
+    echo "No ($code)"
+    return
+  fi
   resp=$(curl_wrapper GET "https://redirector.googlevideo.com/report_mapping" 2>/dev/null)
   local iata
   iata=$(grep -oE "[a-z]{3}[0-9]+s[0-9]+" <<<"$resp" | head -n 1 | cut -c 1-3 | tr '[:lower:]' '[:upper:]')
+  if [[ -z "$iata" ]]; then
+    iata=$(sed -n 's/.*=> [a-z]*\([a-z]\{3\}\)[a-z0-9_-]*.*/\1/p' <<<"$resp" | head -n 1 | tr '[:lower:]' '[:upper:]')
+  fi
   if [[ -n "$iata" ]]; then echo "Yes ($iata)"; else echo "Yes"; fi
 }
 
@@ -703,12 +748,19 @@ lookup_youtube_music() {
 lookup_spotify_signup() {
   local resp
   resp=$(curl_wrapper POST "https://spclient.wg.spotify.com/signup/public/v1/account" \
-    --header "User-Agent: Spotify/8.8.0 Android/33" 2>/dev/null)
+    --header "User-Agent: Spotify/8.8.0 Android/33" \
+    --header "Content-Type: application/json" \
+    --data "{}" 2>/dev/null)
   if jq -e . >/dev/null 2>&1 <<<"$resp"; then echo "Yes"; else echo "No"; fi
 }
 
 lookup_netflix() {
-  local resp
+  local code resp cc=""
+  code=$(curl_http_code "https://www.netflix.com")
+  if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
+    echo "No ($code)"
+    return
+  fi
   resp=$(curl_wrapper GET "https://www.netflix.com" 2>/dev/null)
   local cc
   cc=$(sed -n 's/.*"geolocation_country":"\([^"]*\)".*/\1/p' <<<"$resp" | head -n 1)
@@ -718,7 +770,13 @@ lookup_netflix() {
 lookup_apple() {
   local cc
   cc=$(curl_wrapper GET "https://gspe1-ssl.ls.apple.com/pep/gcc" --timeout 3 2>/dev/null)
-  if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then echo "${cc^^}"; else echo "Yes"; fi
+  if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
+    echo "${cc^^}"
+  elif [[ -n "$cc" ]]; then
+    echo "Yes"
+  else
+    echo "No (Timeout)"
+  fi
 }
 
 lookup_steam() {
@@ -743,56 +801,85 @@ lookup_reddit() {
 # 3. RU Reverse Geoblocking Lookups
 # ------------------------------------------------------------------------------
 
+# Uses -k to validate reachability even when Russian Минцифры CA is not in system trust store
+curl_ru_code() {
+  local url="$1" timeout="${2:-4}"
+  local code
+  code=$(curl -sk -L --max-time "$timeout" -A "$USER_AGENT" -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
+  code="${code: -3}"
+  echo "${code:-000}"
+}
+
 lookup_gosuslugi() {
   local code
-  code=$(curl_http_code "https://www.gosuslugi.ru")
+  code=$(curl_ru_code "https://www.gosuslugi.ru")
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
 }
 
 lookup_yandex() {
   local resp
-  resp=$(curl_wrapper GET "https://ya.ru" --timeout 3 2>/dev/null)
+  resp=$(curl -sk -L --max-time 3 -A "$USER_AGENT" "https://ya.ru" 2>/dev/null)
   if [[ "$resp" == *"smartcaptcha"* || "$resp" == *"showcaptcha"* ]]; then
     echo "Captcha"
   elif [[ -n "$resp" ]]; then
     echo "OK"
   else
-    echo "Blocked"
+    echo "Blocked (Timeout)"
   fi
 }
 
 lookup_vk() {
   local code
-  code=$(curl_http_code "https://vk.com")
+  code=$(curl_ru_code "https://vk.com")
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
 }
 
 lookup_sberbank() {
   local code
-  code=$(curl_http_code "https://www.sberbank.ru")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked (Timeout)"; fi
+  code=$(curl_ru_code "https://www.sberbank.ru" 4)
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then
+    echo "OK"
+  elif [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  else
+    echo "Blocked ($code)"
+  fi
 }
 
 lookup_tbank() {
   local code
-  code=$(curl_http_code "https://tbank.ru")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked (Timeout)"; fi
+  code=$(curl_ru_code "https://tbank.ru" 4)
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then
+    echo "OK"
+  elif [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  else
+    echo "Blocked ($code)"
+  fi
 }
 
 lookup_vtb() {
   local code
-  code=$(curl_http_code "https://www.vtb.ru")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked (Timeout)"; fi
+  code=$(curl_ru_code "https://www.vtb.ru" 4)
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then
+    echo "OK"
+  elif [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  else
+    echo "Blocked ($code)"
+  fi
 }
 
 lookup_avito() {
   local code resp
-  resp=$(curl_wrapper GET "https://www.avito.ru" --timeout 3 2>/dev/null)
-  code=$(curl_http_code "https://www.avito.ru")
-  if [[ "$code" == "429" || "$resp" == *"firewallCaptcha"* || "$resp" == *"geetest"* ]]; then
-    echo "Blocked (Captcha/429)"
+  resp=$(curl -sk -L --max-time 3 -A "$USER_AGENT" "https://www.avito.ru" 2>/dev/null)
+  code=$(curl_ru_code "https://www.avito.ru" 3)
+  if [[ "$code" == "439" || "$code" == "429" || "$resp" == *"QRATOR"* || "$resp" == *"firewallCaptcha"* || "$resp" == *"pow_challenge"* ]]; then
+    echo "Blocked (439 Qrator Captcha)"
   elif [[ "$code" =~ ^(200|301|302)$ ]]; then
     echo "OK"
+  elif [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout)"
   else
     echo "Blocked ($code)"
   fi
@@ -800,7 +887,7 @@ lookup_avito() {
 
 lookup_kinopoisk() {
   local code
-  code=$(curl_http_code "https://www.kinopoisk.ru")
+  code=$(curl_ru_code "https://www.kinopoisk.ru")
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
 }
 
@@ -817,6 +904,22 @@ ping_host() {
   else
     printf "N/A" > "$out_file"
   fi
+}
+
+iperf_speed_test() {
+  local host="$1"
+  shift
+  local ports=("$@")
+  if [[ ${#ports[@]} -eq 0 ]]; then ports=(5201); fi
+  local res=""
+  for p in "${ports[@]}"; do
+    res=$(timeout 3 iperf3 -c "$host" -p "$p" -t 1.5 -P 2 -J 2>/dev/null || echo "")
+    if [[ -n "$res" ]] && jq -e '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
+      jq -r '((.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0) / 1000000 | round | tostring) + " Mbps"' <<<"$res"
+      return
+    fi
+  done
+  echo "—"
 }
 
 measure_ru_connectivity() {
@@ -841,32 +944,23 @@ measure_ru_connectivity() {
   RU_PING_NSK=$(<"$p_dir/nsk")
   RU_PING_IRK=$(<"$p_dir/irk")
 
-  ARR_CONNECTIVITY+=( "Москва (Центр, MSK-IX)"$'\t'"$RU_PING_MSK" )
-  ARR_CONNECTIVITY+=( "Санкт-Петербург (Северо-Запад)"$'\t'"$RU_PING_SPB" )
-  ARR_CONNECTIVITY+=( "Ростов-на-Дону (Юг)"$'\t'"$RU_PING_ROSTOV" )
-  ARR_CONNECTIVITY+=( "Казань (Поволжье)"$'\t'"$RU_PING_KZN" )
-  ARR_CONNECTIVITY+=( "Екатеринбург (Урал)"$'\t'"$RU_PING_EKAT" )
-  ARR_CONNECTIVITY+=( "Новосибирск (Сибирь)"$'\t'"$RU_PING_NSK" )
-  ARR_CONNECTIVITY+=( "Иркутск (Восточная Сибирь)"$'\t'"$RU_PING_IRK" )
-
-  # 3-second iPerf3 speedtest to Moscow with multi-port fallback
+  local s_msk="—" s_spb="—" s_ekat="—" s_nsk="—"
   if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
-    local json_res=""
-    for port in 5201 5202 5203; do
-      json_res=$(timeout 5 iperf3 -c spd-rudp.hostkey.ru -p "$port" -t 3 -P 2 -J 2>/dev/null || echo "")
-      if [[ -n "$json_res" ]] && jq -e '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$json_res"; then
-        break
-      fi
-    done
-    if [[ -n "$json_res" ]] && jq -e . >/dev/null 2>&1 <<<"$json_res"; then
-      local mbps
-      mbps=$(jq -r '((.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0) / 1000000 | round | tostring) + " Mbps"' <<<"$json_res")
-      if [[ "$mbps" != "0 Mbps" ]]; then
-        RU_IPERF_SPEED="$mbps"
-        ARR_CONNECTIVITY+=( "iPerf3 Скорость до Москвы (10G Port)"$'\t'"$RU_IPERF_SPEED" )
-      fi
-    fi
+    s_msk=$(iperf_speed_test "spd-rudp.hostkey.ru" 5201 5202 5203 5204 5205)
+    s_spb=$(iperf_speed_test "st.spb.ertelecom.ru" 5201 5202 5203)
+    s_ekat=$(iperf_speed_test "st.ekat.ertelecom.ru" 5201 5202 5204)
+    s_nsk=$(iperf_speed_test "st.nsk.ertelecom.ru" 5201 5202 5203)
   fi
+
+  RU_IPERF_SPEED="$s_msk"
+
+  ARR_CONNECTIVITY+=( "Москва (Центр, Hostkey / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"$s_msk" )
+  ARR_CONNECTIVITY+=( "Санкт-Петербург (Северо-Запад, SPB)"$'\t'"$RU_PING_SPB"$'\t'"$s_spb" )
+  ARR_CONNECTIVITY+=( "Екатеринбург (Урал, ER-Telecom)"$'\t'"$RU_PING_EKAT"$'\t'"$s_ekat" )
+  ARR_CONNECTIVITY+=( "Новосибирск (Сибирь, ER-Telecom)"$'\t'"$RU_PING_NSK"$'\t'"$s_nsk" )
+  ARR_CONNECTIVITY+=( "Ростов-на-Дону (Юг)"$'\t'"$RU_PING_ROSTOV"$'\t'"—" )
+  ARR_CONNECTIVITY+=( "Казань (Поволжье)"$'\t'"$RU_PING_KZN"$'\t'"—" )
+  ARR_CONNECTIVITY+=( "Иркутск (Восточная Сибирь)"$'\t'"$RU_PING_IRK"$'\t'"—" )
 }
 
 # ------------------------------------------------------------------------------
@@ -1018,13 +1112,13 @@ print_results() {
   printf "\n"
 
   # 4. Connectivity
-  printf "\033[1;97m4. ⚡️ Связность по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+  printf "\033[1;97m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Speed)\033[0m\n"
   {
-    echo -e "  Регион / Тест\tЗадержка / Скорость"
-    echo -e "  ------------------------------------\t-------------------"
+    echo -e "  Регион (Узел связи)\tЗадержка (RTT)\tСкорость (iPerf3)"
+    echo -e "  ------------------------------------\t--------------\t-----------------"
     for row in "${ARR_CONNECTIVITY[@]}"; do
-      IFS=$'\t' read -r name val <<<"$row"
-      echo -e "  $name\t$(format_value "$val")"
+      IFS=$'\t' read -r name ping_val speed_val <<<"$row"
+      echo -e "  $name\t$(format_value "$ping_val")\t$(format_value "$speed_val")"
     done
   } | format_table
   printf "\n"
@@ -1111,8 +1205,8 @@ build_json() {
 
   local conn_json="{}"
   for row in "${ARR_CONNECTIVITY[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    conn_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$conn_json")
+    IFS=$'\t' read -r name ping_val speed_val <<<"$row"
+    conn_json=$(jq --arg k "$name" --arg p "$ping_val" --arg s "$speed_val" '.[$k] = {latency: $p, speed: $s}' <<<"$conn_json")
   done
 
   RESULT_JSON=$(jq -n \
