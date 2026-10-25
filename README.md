@@ -52,6 +52,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
  🇷🇺 NodeCheck (RU Edition) - VPN Node & Quality Auditor v3.2.0-ru
 ================================================================================
  IPv4:             168.222.254.191
+ IPv6:             None (Not configured)
  Локация / ASN:    DE (Frankfurt am Main) — AS198550 (NODE HOST LIMITED)
  ОС и ядро:        Ubuntu 24.04.4 LTS (6.8.0-147-generic x86_64)
  Платформа:        KVM | Аптайм: 4 days, 3 hours, 56 minutes

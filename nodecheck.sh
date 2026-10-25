@@ -1604,6 +1604,8 @@ print_header() {
     echo -e " IPv4:\t$(bold "${EXTERNAL_IPV4:-N/A}")"
     if [[ -n "$EXTERNAL_IPV6" ]]; then
       echo -e " IPv6:\t$(bold "$EXTERNAL_IPV6")"
+    else
+      echo -e " IPv6:\t$(color "$COLOR_NULL" "None (Not configured)")"
     fi
     echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
     echo -e " ОС и ядро:\t$(bold "$NODE_OS")"
@@ -1791,6 +1793,7 @@ build_json() {
 
   RESULT_JSON=$(jq -n \
     --arg ip "${EXTERNAL_IPV4:-}" \
+    --arg ipv6 "${EXTERNAL_IPV6:-}" \
     --arg os "${NODE_OS:-}" \
     --arg virt "${NODE_VIRT:-}" \
     --arg uptime "${NODE_UPTIME:-}" \
@@ -1822,6 +1825,7 @@ build_json() {
     --argjson whitelist "$whitelist_json" \
     '{
       ip: $ip,
+      ipv6: (if $ipv6 != "" then $ipv6 else null end),
       system: {
         os: $os,
         virt: $virt,
