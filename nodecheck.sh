@@ -126,6 +126,18 @@ declare -A COUNTRY_NAMES=(
 color() { printf "\033[%sm%s\033[%sm" "$1" "$2" "$COLOR_RESET"; }
 bold() { printf "\033[%sm%s\033[%sm" "$COLOR_BOLD" "$1" "$COLOR_RESET"; }
 
+progress_status() {
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+    printf "  \033[1;33m⏳\033[0m %s...\r" "$1"
+  fi
+}
+
+progress_clear() {
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+    printf "\r\033[2K\r"
+  fi
+}
+
 format_value() {
   local val="$1"
   case "$val" in
@@ -1355,16 +1367,15 @@ measure_ru_connectivity() {
     fi
 
     if [[ "$should_run" == "true" ]]; then
-      if [[ "$JSON_OUTPUT" != "true" ]]; then
-        printf "    \033[1;33m⏳\033[0m %s: %s | замер iPerf3...\r" "$label" "$ping_val"
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+        printf "  \033[1;33m⏳\033[0m Замер скорости iPerf3: \033[1;97m%s\033[0m (%s)...\r" "$label" "$ping_val"
       fi
       speed=$(iperf_speed_test "$host" "$fallback_host")
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+        printf "\r\033[2K\r"
+      fi
     elif [[ "$RUN_IPERF" == "true" && "$RUN_FULL_IPERF" != "true" ]]; then
       speed="— (--full-iperf)"
-    fi
-
-    if [[ "$JSON_OUTPUT" != "true" ]]; then
-      printf "\r\033[K    \033[1;32m✓\033[0m %s: \033[1;97m%s\033[0m | \033[1;36m%s\033[0m\n" "$label" "$ping_val" "$speed"
     fi
 
     ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
@@ -1583,18 +1594,7 @@ calculate_geoip_stats() {
   printf "\n"
 }
 
-print_results() {
-  calculate_verdict
-
-  if [[ "$JSON_OUTPUT" == "true" ]]; then
-    build_json
-    printf "%s\n" "$RESULT_JSON"
-    return
-  fi
-
-  print_header
-
-  # 1. GeoIP Consensus Table
+print_geoip_table() {
   printf "\033[1;97m1. 🌐 Консенсус GeoIP баз данных (18 источников)\033[0m\n"
   if [[ $IPV6_SUPPORTED -eq 1 ]]; then
     {
@@ -1617,8 +1617,9 @@ print_results() {
   fi
   printf "\n"
   calculate_geoip_stats
+}
 
-  # 2. Western Unblock Table
+print_western_unblock_table() {
   printf "\033[1;97m2. 🔓 Обход блокировок в РФ (Western Services)\033[0m\n"
   {
     echo -e "  Сервис\tСтатус"
@@ -1629,8 +1630,9 @@ print_results() {
     done
   } | format_table
   printf "\n"
+}
 
-  # 3. Reverse Geoblocking Table
+print_ru_local_table() {
   printf "\033[1;97m3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
   {
     echo -e "  Сервис\tСтатус"
@@ -1641,9 +1643,35 @@ print_results() {
     done
   } | format_table
   printf "\n"
+}
 
-  # 4. Connectivity
-  printf "\033[1;97m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+print_whitelist_table() {
+  printf "\033[1;97m4. ⚪ Готовность к режиму «Белых списков» (White List & RU CDN Readiness)\033[0m\n"
+  {
+    echo -e "  Параметр / Узел\tСтатус"
+    echo -e "  ------------------------------------\t------"
+    for row in "${ARR_WHITELIST[@]}"; do
+      IFS=$'\t' read -r name val <<<"$row"
+      echo -e "  $name\t$(format_value "$val")"
+    done
+  } | format_table
+  printf "\n"
+}
+
+print_security_table() {
+  printf "\033[1;97m5. 🛡 Безопасность периметра и Zero-Probing (Anti-Active Probing / SelfSteal)\033[0m\n"
+  {
+    echo -e "  Тест периметра\tРезультат"
+    echo -e "  ------------------------------------\t------"
+    echo -e "  Защита от зондов ТСПУ (80/443)\t$(color "$NODE_ZERO_PROBE_COLOR" "$NODE_ZERO_PROBE")"
+    if [[ -n "$CHECK_SNI" ]]; then
+      echo -e "  Сверка SNI ➔ DNS (nDPI)\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
+    fi
+  } | format_table
+  printf "\n"
+}
+
+print_connectivity_table() {
   {
     echo -e "  Регион (Узел связи)\tЗадержка (RTT)\tСкорость (↓ DL / ↑ UL)"
     echo -e "  ------------------------------------\t--------------\t-----------------------"
@@ -1656,32 +1684,25 @@ print_results() {
     printf "  \033[0;90m* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n"
   fi
   printf "\n"
+}
 
-  # 5. White List Readiness Table
-  printf "\033[1;97m5. ⚪ Готовность к режиму «Белых списков» (White List & RU CDN Readiness)\033[0m\n"
-  {
-    echo -e "  Параметр / Узел\tСтатус"
-    echo -e "  ------------------------------------\t------"
-    for row in "${ARR_WHITELIST[@]}"; do
-      IFS=$'\t' read -r name val <<<"$row"
-      echo -e "  $name\t$(format_value "$val")"
-    done
-  } | format_table
-  printf "\n"
+print_results() {
+  calculate_verdict
 
-  # 6. Security & Zero-Probing Table
-  printf "\033[1;97m6. 🛡 Безопасность периметра и Zero-Probing (Anti-Active Probing / SelfSteal)\033[0m\n"
-  {
-    echo -e "  Тест периметра\tРезультат"
-    echo -e "  ------------------------------------\t------"
-    echo -e "  Защита от зондов ТСПУ (80/443)\t$(color "$NODE_ZERO_PROBE_COLOR" "$NODE_ZERO_PROBE")"
-    if [[ -n "$CHECK_SNI" ]]; then
-      echo -e "  Сверка SNI ➔ DNS (nDPI)\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
-    fi
-  } | format_table
-  printf "\n"
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    build_json
+    printf "%s\n" "$RESULT_JSON"
+    return
+  fi
 
-  # 7. Final Verdict
+  print_header
+  print_geoip_table
+  print_western_unblock_table
+  print_ru_local_table
+  print_whitelist_table
+  print_security_table
+  printf "\033[1;97m6. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+  print_connectivity_table
   print_verdict
 }
 
@@ -2139,9 +2160,7 @@ main() {
   install_dependencies
   check_doh
 
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 1/5:\033[0m Определение параметров ноды, MTU и реестра РКН...\n"
-  fi
+  # 1. External IP & Node Parameters
   discover_external_ips
 
   if [[ -z "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
@@ -2151,49 +2170,51 @@ main() {
   get_vpn_node_info
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "    \033[1;32m✓\033[0m Нода: \033[1;97m%s\033[0m (%s) | %s | BBR: %s | Port 25: %s\n" \
-      "${EXTERNAL_IPV4:-$EXTERNAL_IPV6}" "${NODE_COUNTRY_CODE:-??}" "${NODE_ORG:-${NODE_ASN:-ISP}}" "$NODE_BBR_STATUS" "$NODE_PORT25_STATUS"
+    print_header
   fi
 
-  # 1. 18 GeoIP Databases
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 2/5:\033[0m Опрос 18 GeoIP баз данных (параллельно)...\n"
-  fi
+  # 2. 18 GeoIP Databases
   run_geoip_consensus
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "    \033[1;32m✓\033[0m 18 GeoIP баз данных опрошены\n"
+    print_geoip_table
   fi
 
-  # 2. Western Services & RU Local Services
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 3/5:\033[0m Проверка 33 сервисов обхода цензуры и Рунета (параллельно)...\n"
-  fi
+  # 3. Western Services & RU Local Services
   run_services_check
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    local unblock_ok=0
-    for row in "${ARR_RU_UNBLOCK[@]}"; do
-      IFS=$'\t' read -r _ val <<<"$row"
-      if [[ "$val" != "No"* ]]; then unblock_ok=$((unblock_ok + 1)); fi
-    done
-    printf "    \033[1;32m✓\033[0m Сервисы: \033[1;97m%d/%d\033[0m зарубежных открыты | Рунет проверен\n" "$unblock_ok" "${#ARR_RU_UNBLOCK[@]}"
+    print_western_unblock_table
+    print_ru_local_table
   fi
 
-  # 3. Connectivity
+  # 4. White List & Perimeter Security
+  measure_whitelist_readiness
+
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 4/5:\033[0m Замер связности и скорости по 7 регионам РФ (в реальном времени):\n"
+    print_whitelist_table
+    print_security_table
+  fi
+
+  # 5. Multi-Region Connectivity & iPerf3 Speed (AT THE VERY END!)
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "\033[1;97m6. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
   fi
   measure_ru_connectivity
 
-  # 4. White List & Cascade Readiness
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;36m[*] Шаг 5/5:\033[0m Аудит готовности к Белым Спискам и каскаду VLESS XHTTP...\n"
+    print_connectivity_table
   fi
-  measure_whitelist_readiness
 
-  printf "\n"
-  print_results
+  # 6. Final Verdict
+  calculate_verdict
+
+  if [[ "$JSON_OUTPUT" == "true" ]]; then
+    build_json
+    printf "%s\n" "$RESULT_JSON"
+  else
+    print_verdict
+  fi
 }
 
 main "$@"
