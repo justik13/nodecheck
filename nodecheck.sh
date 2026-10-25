@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.1.0
-# Comprehensive VPN Node Quality, Geolocation & Censorship Auditor
-# Tailored for Russian Federation Network Realities (TSPU / Reverse Geoblocking)
+# NodeCheck (RU Edition) v3.3.0
+# Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
+# Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
 # GitHub: https://github.com/justik13/nodecheck
 # License: MIT
@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-SCRIPT_VERSION="3.2.0-ru"
+SCRIPT_VERSION="3.3.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -27,8 +27,6 @@ INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
 RUN_IPERF=true
 RUN_FULL_IPERF=false
-CHECK_SNI=""
-CUSTOM_CDN_ENDPOINT=""
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -49,10 +47,6 @@ NODE_RKN_COLOR="NULL"
 NODE_BBR_STATUS=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
-NODE_ZERO_PROBE=""
-NODE_ZERO_PROBE_COLOR="NULL"
-NODE_SNI_STATUS=""
-NODE_SNI_COLOR="NULL"
 
 NODE_CPU_MODEL=""
 NODE_CPU_CORES=1
@@ -65,11 +59,6 @@ NODE_CPU_STEAL="0.0%"
 NODE_CPU_STEAL_NUM="0.0"
 NODE_CPU_STEAL_ALLTIME="0.0"
 NODE_CPU_STEAL_COLOR="1;32"
-
-WL_NODE_ROLE=""
-WL_ANYCAST_RTT="N/A"
-WL_CASCADE_STATUS=""
-ARR_WHITELIST=()
 
 RU_PING_MSK=""
 RU_PING_SPB=""
@@ -493,69 +482,6 @@ get_vpn_node_info() {
   else
     NODE_RKN_STATUS="N/A"
     NODE_RKN_COLOR="0;90"
-  fi
-
-  # Zero-Probing & Active Anti-Censorship Perimeter Check (Ports 80/443)
-  local p80 p443 p80_loc="" p443_cert="" leak_found=false
-  p80=$(curl -s -m 2 -o /dev/null -w "%{http_code}" http://127.0.0.1/ 2>/dev/null)
-  p80="${p80: -3}"; p80="${p80:-000}"
-
-  p443=$(curl -sk -m 2 -o /dev/null -w "%{http_code}" https://127.0.0.1/ 2>/dev/null)
-  p443="${p443: -3}"; p443="${p443:-000}"
-
-  # Check domain leak in HTTP redirect
-  if [[ "$p80" =~ ^(301|308)$ ]]; then
-    p80_loc=$(curl -s -I -m 2 http://127.0.0.1/ 2>/dev/null | grep -i '^Location:' | tr -d '\r\n')
-    if [[ -n "$p80_loc" ]] && grep -oE 'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$p80_loc" | grep -qvE '(127\.0\.0\.1|localhost)'; then
-      leak_found=true
-    fi
-  fi
-
-  # Check domain leak in TLS certificate CN/SAN
-  if [[ "$p443" != "000" ]] && is_command_available openssl; then
-    if is_command_available timeout; then
-      p443_cert=$(echo | timeout 2 openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null || echo "")
-    else
-      p443_cert=$(echo | openssl s_client -connect 127.0.0.1:443 2>/dev/null | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null || echo "")
-    fi
-    if grep -oE '[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' <<<"$p443_cert" | grep -qvE '(127\.0\.0\.1|localhost|local|example)'; then
-      leak_found=true
-    fi
-  fi
-
-  if [[ "$leak_found" == "true" ]]; then
-    NODE_ZERO_PROBE="⚠️ Vulnerable (Domain Leak to TSPU in Redirect/Cert)"
-    NODE_ZERO_PROBE_COLOR="1;31"
-  elif [[ "$p80" == "000" && "$p443" == "000" ]]; then
-    NODE_ZERO_PROBE="Protected (Ports Closed / Silent Drop)"
-    NODE_ZERO_PROBE_COLOR="1;32"
-  elif [[ "$p80" =~ ^(404|421)$ || "$p443" =~ ^(404|421)$ ]]; then
-    NODE_ZERO_PROBE="Protected (Active Fallback HTTP $p80/$p443)"
-    NODE_ZERO_PROBE_COLOR="1;32"
-  elif [[ "$p80" == "200" || "$p443" == "200" ]]; then
-    NODE_ZERO_PROBE="Caution (Web Server Active HTTP 200, Check Camouflage)"
-    NODE_ZERO_PROBE_COLOR="1;33"
-  else
-    NODE_ZERO_PROBE="Protected (HTTP $p80/$p443 No Leaks)"
-    NODE_ZERO_PROBE_COLOR="1;32"
-  fi
-
-  # SelfSteal SNI Verification (nDPI NDPI_UNRESOLVED_HOSTNAME check)
-  if [[ -n "$CHECK_SNI" ]]; then
-    local sni_ip
-    sni_ip=$(curl_wrapper GET "https://cloudflare-dns.com/dns-query?name=${CHECK_SNI}&type=A" -H "accept: application/dns-json" --timeout 3 2>/dev/null | jq -r '.Answer[]? | select(.type==1) | .data' 2>/dev/null | head -n1 || echo "")
-    if [[ -n "$sni_ip" ]]; then
-      if [[ "$sni_ip" == "$EXTERNAL_IPV4" ]]; then
-        NODE_SNI_STATUS="Valid SelfSteal (Domain resolves to node IP $EXTERNAL_IPV4)"
-        NODE_SNI_COLOR="1;32"
-      else
-        NODE_SNI_STATUS="⚠️ Mismatch! Domain resolves to $sni_ip, node is $EXTERNAL_IPV4 (Risk of NDPI_UNRESOLVED_HOSTNAME)"
-        NODE_SNI_COLOR="1;31"
-      fi
-    else
-      NODE_SNI_STATUS="Cannot resolve domain $CHECK_SNI"
-      NODE_SNI_COLOR="0;90"
-    fi
   fi
 }
 
@@ -1461,112 +1387,6 @@ measure_ru_iperf() {
 }
 
 # ------------------------------------------------------------------------------
-# 5. White List (WL) & Russian CDN Readiness
-# ------------------------------------------------------------------------------
-
-measure_whitelist_readiness() {
-  if [[ "$NODE_COUNTRY_CODE" == "RU" ]]; then
-    WL_NODE_ROLE="Origin / Ingress (Внутри РФ)"
-  else
-    WL_NODE_ROLE="Exit / Outbound (Зарубежный шлюз)"
-  fi
-
-  local wl_dir="$TMP_WORK_DIR/wl"
-  mkdir -p "$wl_dir"
-
-  (
-    # Tier 1: State Messenger MAX (max.ru)
-    local c1
-    c1=$(curl_http_code "https://max.ru/")
-    echo "$c1" > "$wl_dir/max"
-  ) &
-
-  (
-    # Tier 2: Yandex Anycast CDN (yastatic.net)
-    local c2
-    c2=$(curl_http_code "https://yastatic.net/")
-    echo "$c2" > "$wl_dir/yandex"
-  ) &
-
-  (
-    # Tier 2: VK Cloud (vk.com)
-    local c3
-    c3=$(curl_http_code "https://vk.com/")
-    echo "$c3" > "$wl_dir/vk"
-  ) &
-
-  (
-    # Tier 2: Gosuslugi (gosuslugi.ru)
-    local c4
-    c4=$(curl_http_code "https://gosuslugi.ru/")
-    echo "$c4" > "$wl_dir/gosuslugi"
-  ) &
-
-  wait
-
-  local res_max res_ya res_vk res_gu
-  res_max=$(<"$wl_dir/max")
-  res_ya=$(<"$wl_dir/yandex")
-  res_vk=$(<"$wl_dir/vk")
-  res_gu=$(<"$wl_dir/gosuslugi")
-
-  WL_ANYCAST_RTT="N/A"
-  if [[ -n "$RU_PING_MSK" && "$RU_PING_MSK" != "N/A" ]]; then
-    WL_ANYCAST_RTT="$RU_PING_MSK"
-  fi
-
-  local rtt_num
-  rtt_num=$(echo "$WL_ANYCAST_RTT" | grep -oE '^[0-9]+(\.[0-9]+)?' || echo "999")
-  if (( $(awk -v r="$rtt_num" 'BEGIN { print (r <= 80) ? 1 : 0 }') )); then
-    WL_CASCADE_STATUS="Отлично (<80 ms, минимальный джиттер)"
-  elif (( $(awk -v r="$rtt_num" 'BEGIN { print (r <= 120) ? 1 : 0 }') )); then
-    WL_CASCADE_STATUS="Допустимо (80–120 ms, возможен джиттер)"
-  else
-    WL_CASCADE_STATUS="В зоне риска (>120 ms: риск 504 Gateway Timeout)"
-  fi
-
-  local cdn_check_status=""
-  if [[ -n "$CUSTOM_CDN_ENDPOINT" ]]; then
-    local cdn_res
-    cdn_res=$(curl -sS -D - -o /dev/null -X GET -H "data-0: dGVzdA==" --max-time 4 "$CUSTOM_CDN_ENDPOINT?nocache=$(date +%s)" 2>/dev/null || echo "")
-    if grep -q "204" <<<"$cdn_res" || grep -iq "x-cdn-origin: ok" <<<"$cdn_res"; then
-      cdn_check_status="OK (HTTP 204 / Bodiless Header Uplink)"
-    elif grep -q "413" <<<"$cdn_res"; then
-      cdn_check_status="⚠️ 413 (CDN blocks bodies, use Header Uplink)"
-    elif grep -q "504" <<<"$cdn_res"; then
-      cdn_check_status="⚠️ 504 (Gateway Timeout, Origin unreachable)"
-    elif grep -q "502" <<<"$cdn_res"; then
-      cdn_check_status="⚠️ 502 (Bad Gateway, check Origin port/cert)"
-    else
-      local http_code
-      http_code=$(grep -oE "HTTP/[0-9.]+ [0-9]{3}" <<<"$cdn_res" | head -n1 || echo "Error")
-      cdn_check_status="$http_code"
-    fi
-  fi
-
-  format_wl_code() {
-    local c="$1"
-    if [[ "$c" =~ ^(200|301|302)$ ]]; then
-      echo "OK (Доступен)"
-    else
-      echo "Blocked ($c)"
-    fi
-  }
-
-  ARR_WHITELIST=()
-  ARR_WHITELIST+=( "Роль ноды в топологии"$'\t'"$WL_NODE_ROLE" )
-  ARR_WHITELIST+=( "Мессенджер MAX (max.ru, Уровень 1)"$'\t'"$(format_wl_code "$res_max")" )
-  ARR_WHITELIST+=( "Anycast Яндекс / CDN (yastatic.net, Уровень 2)"$'\t'"$(format_wl_code "$res_ya")" )
-  ARR_WHITELIST+=( "VK Cloud / ВКонтакте (vk.com, Уровень 2)"$'\t'"$(format_wl_code "$res_vk")" )
-  ARR_WHITELIST+=( "Портал Госуслуг (gosuslugi.ru, Уровень 2)"$'\t'"$(format_wl_code "$res_gu")" )
-  ARR_WHITELIST+=( "Задержка до Anycast РФ (RTT)"$'\t'"$WL_ANYCAST_RTT — $WL_CASCADE_STATUS" )
-  ARR_WHITELIST+=( "Стек протоколов под Белые Списки"$'\t'"UDP мертв в WL ➔ VLESS XHTTP over TCP/TLS 443" )
-  if [[ -n "$CUSTOM_CDN_ENDPOINT" ]]; then
-    ARR_WHITELIST+=( "Кастомный CDN ($CUSTOM_CDN_ENDPOINT)"$'\t'"$cdn_check_status" )
-  fi
-}
-
-# ------------------------------------------------------------------------------
 # Output Formatting
 # ------------------------------------------------------------------------------
 
@@ -1598,7 +1418,7 @@ format_table() {
 
 print_header() {
   printf "\033[1;36m================================================================================\033[0m\n"
-  printf " 🇷🇺 \033[1;97mNodeCheck (RU Edition) - VPN Node & Quality Auditor v%s\033[0m\n" "$SCRIPT_VERSION"
+  printf " 🇷🇺 \033[1;97mNodeCheck (RU Edition) - Node & Network Quality Auditor v%s\033[0m\n" "$SCRIPT_VERSION"
   printf "\033[1;36m================================================================================\033[0m\n"
   {
     echo -e " IPv4:\t$(bold "${EXTERNAL_IPV4:-N/A}")"
@@ -1617,9 +1437,6 @@ print_header() {
     echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
-    if [[ -n "$CHECK_SNI" ]]; then
-      echo -e " SelfSteal SNI:\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
-    fi
   } | format_table
   printf "\033[1;36m================================================================================\033[0m\n\n"
 }
@@ -1694,7 +1511,7 @@ print_geoip_table() {
 }
 
 print_western_unblock_table() {
-  printf "\033[1;97m2. 🔓 Обход блокировок в РФ (Western Services)\033[0m\n"
+  printf "\033[1;97m2. 🌐 Доступность зарубежных сервисов (Western Services)\033[0m\n"
   {
     echo -e "  Сервис\tСтатус"
     echo -e "  ------------------------------------\t------"
@@ -1715,32 +1532,6 @@ print_ru_local_table() {
       IFS=$'\t' read -r name val <<<"$row"
       echo -e "  $name\t$(format_value "$val")"
     done
-  } | format_table
-  printf "\n"
-}
-
-print_whitelist_table() {
-  printf "\033[1;97m4. ⚪ Готовность к режиму «Белых списков» (White List & RU CDN Readiness)\033[0m\n"
-  {
-    echo -e "  Параметр / Узел\tСтатус"
-    echo -e "  ------------------------------------\t------"
-    for row in "${ARR_WHITELIST[@]}"; do
-      IFS=$'\t' read -r name val <<<"$row"
-      echo -e "  $name\t$(format_value "$val")"
-    done
-  } | format_table
-  printf "\n"
-}
-
-print_security_table() {
-  printf "\033[1;97m5. 🛡 Безопасность периметра и Zero-Probing (Anti-Active Probing / SelfSteal)\033[0m\n"
-  {
-    echo -e "  Тест периметра\tРезультат"
-    echo -e "  ------------------------------------\t------"
-    echo -e "  Защита от зондов ТСПУ (80/443)\t$(color "$NODE_ZERO_PROBE_COLOR" "$NODE_ZERO_PROBE")"
-    if [[ -n "$CHECK_SNI" ]]; then
-      echo -e "  Сверка SNI ➔ DNS (nDPI)\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
-    fi
   } | format_table
   printf "\n"
 }
@@ -1785,12 +1576,6 @@ build_json() {
     conn_json=$(jq --arg k "$name" --arg p "$ping_val" --arg s "$speed_val" '.[$k] = {latency: $p, speed: $s}' <<<"$conn_json")
   done
 
-  local whitelist_json="{}"
-  for row in "${ARR_WHITELIST[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    whitelist_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$whitelist_json")
-  done
-
   RESULT_JSON=$(jq -n \
     --arg ip "${EXTERNAL_IPV4:-}" \
     --arg ipv6 "${EXTERNAL_IPV6:-}" \
@@ -1814,15 +1599,12 @@ build_json() {
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
-    --arg zero_probe "${NODE_ZERO_PROBE:-}" \
-    --arg sni_status "${NODE_SNI_STATUS:-}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
     --argjson geoip "$geoip_json" \
     --argjson unblock "$unblock_json" \
     --argjson local "$local_json" \
     --argjson connectivity "$conn_json" \
-    --argjson whitelist "$whitelist_json" \
     '{
       ip: $ip,
       ipv6: (if $ipv6 != "" then $ipv6 else null end),
@@ -1840,9 +1622,7 @@ build_json() {
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
       network: { bbr: $bbr, udp: $udp, port25: $port25 },
-      security: { zero_probe: $zero_probe, sni_status: $sni_status },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
-      whitelist_readiness: $whitelist,
       geoip_consensus: $geoip,
       ru_unblock: $unblock,
       ru_local_services: $local,
@@ -1854,7 +1634,7 @@ display_help() {
   cat <<EOF
 Usage: nodecheck.sh [OPTIONS]
 
-NodeCheck (RU Edition) - Comprehensive VPN Node Quality & Censorship Auditor
+NodeCheck (RU Edition) - Node & Network Quality Auditor
 
 Options:
   -h, --help               Show this help message and exit
@@ -1862,20 +1642,16 @@ Options:
   -d, --debug              Enable debug mode (saves trace to $DEBUG_LOG_FILE)
   -j, --json               Output results in pure JSON format
   --no-iperf               Skip iPerf3 speedtest (latency ping only)
-  --sni DOMAIN             Verify domain against node IP (protect against NDPI_UNRESOLVED_HOSTNAME)
-  --cdn URL                Validate VLESS XHTTP CDN endpoint (Bodiless GET / Header Uplink check)
   -p, --proxy ADDR         Use SOCKS5/SOCKS5h proxy (format: host:port)
-  -i, --interface IF       Bind requests to network interface (e.g. eth0, wg0)
+  -i, --interface IF       Bind requests to network interface (e.g. eth0, ens3)
   --no-doh                 Disable DNS-over-HTTPS (use system resolver)
   --doh PROVIDER           Select DoH provider: cloudflare, quad9, adguard
 
 Examples:
-  ./nodecheck.sh                         # Run full audit (GeoIP, Unblock, RU Geoblock, All-RU Ping, iPerf3)
+  ./nodecheck.sh                         # Run full audit (Hardware, GeoIP, Services, All-RU Speed)
   ./nodecheck.sh --no-iperf              # Run audit without bandwidth speedtest
-  ./nodecheck.sh --sni mydomain.com      # Validate domain against IP for SelfSteal SNI
-  ./nodecheck.sh --cdn https://cdn.x.com # Test VLESS XHTTP CDN endpoint
-  ./nodecheck.sh -p 127.0.0.1:1080       # Audit VPN/Proxy node via SOCKS5
-  ./nodecheck.sh -j                      # Output pure JSON for monitoring / bots
+  ./nodecheck.sh -p 127.0.0.1:1080       # Audit node via SOCKS5 proxy
+  ./nodecheck.sh -j                      # Output pure JSON
 
 EOF
 }
@@ -1906,20 +1682,6 @@ parse_arguments() {
       --full-iperf)
         RUN_FULL_IPERF=true
         shift
-        ;;
-      --sni)
-        if [[ $# -lt 2 || "$2" == -* ]]; then
-          error_exit "Option $1 requires a domain argument"
-        fi
-        CHECK_SNI="$2"
-        shift 2
-        ;;
-      --cdn)
-        if [[ $# -lt 2 || "$2" == -* ]]; then
-          error_exit "Option $1 requires a URL argument"
-        fi
-        CUSTOM_CDN_ENDPOINT="$2"
-        shift 2
         ;;
       -p|--proxy)
         if [[ $# -lt 2 || "$2" == -* ]]; then
@@ -1996,18 +1758,11 @@ main() {
     print_ru_local_table
   fi
 
-  # 4. Multi-Region Pings & White List Readiness
+  # 4. Multi-Region Pings & Speedtest
   measure_ru_pings
-  measure_whitelist_readiness
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    print_whitelist_table
-    print_security_table
-  fi
-
-  # 5. Multi-Region Connectivity & iPerf3 Speed (AT THE VERY END!)
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;97m6. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+    printf "\033[1;97m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
   fi
   measure_ru_iperf
 
