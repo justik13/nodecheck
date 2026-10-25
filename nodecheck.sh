@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-SCRIPT_VERSION="3.3.0-ru"
+SCRIPT_VERSION="3.4.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -27,6 +27,8 @@ INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
 RUN_IPERF=true
 RUN_FULL_IPERF=false
+IPERF_TIME_DL=5
+IPERF_TIME_UL=3
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -39,11 +41,11 @@ NODE_CITY=""
 NODE_COUNTRY_CODE=""
 NODE_TYPE=""
 NODE_RISK=""
-NODE_RISK_COLOR="NULL"
+NODE_RISK_COLOR="0;90"
 NODE_CAPTCHA_STATUS=""
-NODE_CAPTCHA_COLOR="NULL"
+NODE_CAPTCHA_COLOR="0;90"
 NODE_RKN_STATUS="Checking..."
-NODE_RKN_COLOR="NULL"
+NODE_RKN_COLOR="0;90"
 NODE_BBR_STATUS=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
@@ -80,13 +82,33 @@ USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 DEBUG_LOG_FILE="/tmp/nodecheck_debug.log"
 TMP_WORK_DIR=""
 
+NO_COLOR_MODE=false
+
+COLOR_SUCCESS="1;32"
+COLOR_WARN="1;33"
+COLOR_DANGER="1;31"
+COLOR_INFO="1;36"
 COLOR_ASN="1;33"
 COLOR_TABLE_VALUE="1"
 COLOR_NULL="0;90"
 COLOR_ERROR="1;31"
-COLOR_INFO="1;36"
 COLOR_BOLD="1"
 COLOR_RESET="0"
+
+init_colors() {
+  if [[ -n "${NO_COLOR:-}" || "$NO_COLOR_MODE" == "true" ]] || ! [[ -t 1 ]]; then
+    COLOR_SUCCESS=""
+    COLOR_WARN=""
+    COLOR_DANGER=""
+    COLOR_INFO=""
+    COLOR_ASN=""
+    COLOR_TABLE_VALUE=""
+    COLOR_NULL=""
+    COLOR_ERROR=""
+    COLOR_BOLD=""
+    COLOR_RESET=""
+  fi
+}
 
 STATUS_NA="N/A"
 
@@ -113,18 +135,48 @@ declare -A COUNTRY_NAMES=(
   [KH]="Cambodia" [MN]="Mongolia" [MM]="Myanmar"
 )
 
-color() { printf "\033[%sm%s\033[%sm" "$1" "$2" "$COLOR_RESET"; }
-bold() { printf "\033[%sm%s\033[%sm" "$COLOR_BOLD" "$1" "$COLOR_RESET"; }
+color() {
+  if [[ -z "$1" || -z "$COLOR_RESET" ]]; then
+    printf "%s" "$2"
+  else
+    printf "\033[%sm%s\033[%sm" "$1" "$2" "$COLOR_RESET"
+  fi
+}
+
+bold() {
+  if [[ -z "$COLOR_BOLD" ]]; then
+    printf "%s" "$1"
+  else
+    printf "\033[%sm%s\033[%sm" "$COLOR_BOLD" "$1" "$COLOR_RESET"
+  fi
+}
 
 progress_status() {
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-    printf "  \033[1;33m⏳\033[0m %s...\r" "$1"
+    if [[ -n "$COLOR_WARN" ]]; then
+      printf "  \033[%sm⏳\033[0m %s...\r" "$COLOR_WARN" "$1"
+    else
+      printf "  * %s...\r" "$1"
+    fi
   fi
 }
 
 progress_clear() {
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
     printf "\r\033[2K\r"
+  fi
+}
+
+pad_str() {
+  local s="$1" w="$2"
+  local clean
+  clean=$(sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' <<<"$s")
+  local len=${#clean}
+  local diff=$(( w - len ))
+  if (( diff > 0 )); then
+    printf "%s%*s" "$s" "$diff" ""
+  else
+    printf "%s" "$s"
   fi
 }
 
@@ -138,16 +190,30 @@ format_value() {
       color "$COLOR_NULL" "$STATUS_NA"
       ;;
     "Yes"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*)
-      color "1;32" "$val"
+      color "$COLOR_SUCCESS" "$val"
       ;;
     *"[Без рекламы"*|*"Без рекламы"*)
-      color "1;32" "$val"
+      color "$COLOR_SUCCESS" "$val"
       ;;
     "No"*|*"Captcha"*|*"Blocked"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*)
-      color "1;31" "$val"
+      color "$COLOR_DANGER" "$val"
       ;;
     *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*)
-      color "1;33" "$val"
+      color "$COLOR_WARN" "$val"
+      ;;
+    *"ms")
+      local num_ms
+      num_ms=$(grep -oE '^[0-9]+' <<<"$val" || echo "999")
+      if (( num_ms < 60 )); then
+        color "$COLOR_SUCCESS" "$val"
+      elif (( num_ms < 100 )); then
+        color "$COLOR_WARN" "$val"
+      else
+        color "$COLOR_TABLE_VALUE" "$val"
+      fi
+      ;;
+    *"Mbps"*)
+      color "$COLOR_TABLE_VALUE" "$val"
       ;;
     *)
       if [[ "$val" =~ ^[A-Z]{2}$ ]] || [[ "$val" =~ ^[A-Z]{2}\ \([A-Z0-9-]+\)$ ]]; then
@@ -172,12 +238,17 @@ log() {
 }
 
 error_exit() {
-  printf "\033[%smError:\033[0m %s\n" "$COLOR_ERROR" "$1" >&2
+  if [[ -n "$COLOR_ERROR" ]]; then
+    printf "\033[%smОшибка:\033[0m %s\n" "$COLOR_ERROR" "$1" >&2
+  else
+    printf "Ошибка: %s\n" "$1" >&2
+  fi
   cleanup
   exit 1
 }
 
 cleanup() {
+  progress_clear
   if [[ -n "$TMP_WORK_DIR" && -d "$TMP_WORK_DIR" ]]; then
     rm -rf "$TMP_WORK_DIR"
   fi
@@ -217,6 +288,7 @@ install_dependencies() {
     return 0
   fi
 
+  progress_status "Установка недостающих пакетов (${required_cmds[*]})"
   log "INFO" "Installing missing packages: ${required_cmds[*]}"
   if is_command_available "apt-get"; then
     export DEBIAN_FRONTEND=noninteractive
@@ -227,10 +299,11 @@ install_dependencies() {
   elif is_command_available "yum"; then
     yum install -y -q "${required_cmds[@]}" >/dev/null 2>&1 || true
   fi
+  progress_clear
 
   for critical in curl jq; do
     if ! is_command_available "$critical"; then
-      error_exit "Essential tool '$critical' is required but not installed. Run: sudo apt install -y $critical"
+      error_exit "Необходимая утилита '$critical' не найдена. Установите: sudo apt install -y $critical"
     fi
   done
 }
@@ -401,17 +474,17 @@ get_vpn_node_info() {
   if [[ -n "$risk_score" ]]; then
     if (( risk_score > 60 )); then
       NODE_RISK="High Risk / Flagged ($risk_score/100)"
-      NODE_RISK_COLOR="1;31"
+      NODE_RISK_COLOR="$COLOR_DANGER"
     elif (( risk_score > 25 )); then
       NODE_RISK="Moderate Risk ($risk_score/100)"
-      NODE_RISK_COLOR="1;33"
+      NODE_RISK_COLOR="$COLOR_WARN"
     else
       NODE_RISK="Clean / Low Risk ($risk_score/100)"
-      NODE_RISK_COLOR="1;32"
+      NODE_RISK_COLOR="$COLOR_SUCCESS"
     fi
   else
     NODE_RISK="N/A (API Unavailable)"
-    NODE_RISK_COLOR="0;90"
+    NODE_RISK_COLOR="$COLOR_NULL"
   fi
 
   # Google Captcha Test
@@ -419,13 +492,13 @@ get_vpn_node_info() {
   g_search=$(curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 2>/dev/null)
   if [[ -z "$g_search" ]]; then
     NODE_CAPTCHA_STATUS="N/A (Timeout)"
-    NODE_CAPTCHA_COLOR="0;90"
+    NODE_CAPTCHA_COLOR="$COLOR_NULL"
   elif [[ "$g_search" == *"recaptcha"* || "$g_search" == *"unusual traffic"* || "$g_search" == *"our systems have detected"* ]]; then
     NODE_CAPTCHA_STATUS="Triggered (Captcha)"
-    NODE_CAPTCHA_COLOR="1;31"
+    NODE_CAPTCHA_COLOR="$COLOR_DANGER"
   else
     NODE_CAPTCHA_STATUS="Clean (No Captcha)"
-    NODE_CAPTCHA_COLOR="1;32"
+    NODE_CAPTCHA_COLOR="$COLOR_SUCCESS"
   fi
 
   # TCP BBR status
@@ -474,14 +547,14 @@ get_vpn_node_info() {
 
     if [[ "$rkn_hit" == "true" ]]; then
       NODE_RKN_STATUS="BLOCKED in RU (Antifilter Registry)"
-      NODE_RKN_COLOR="1;31"
+      NODE_RKN_COLOR="$COLOR_DANGER"
     else
       NODE_RKN_STATUS="Clean (Not in Registry)"
-      NODE_RKN_COLOR="1;32"
+      NODE_RKN_COLOR="$COLOR_SUCCESS"
     fi
   else
     NODE_RKN_STATUS="N/A"
-    NODE_RKN_COLOR="0;90"
+    NODE_RKN_COLOR="$COLOR_NULL"
   fi
 }
 
@@ -554,13 +627,13 @@ get_system_specs() {
   alltime_int=$(grep -oE '^[0-9]+' <<<"$NODE_CPU_STEAL_ALLTIME" || echo "0")
 
   if (( steal_int > 10 || alltime_int > 5 )); then
-    NODE_CPU_STEAL_COLOR="1;31"
+    NODE_CPU_STEAL_COLOR="$COLOR_DANGER"
     NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (High Steal / Оверселл!) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   elif (( steal_int > 3 || alltime_int > 2 )); then
-    NODE_CPU_STEAL_COLOR="1;33"
+    NODE_CPU_STEAL_COLOR="$COLOR_WARN"
     NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Moderate) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   else
-    NODE_CPU_STEAL_COLOR="1;32"
+    NODE_CPU_STEAL_COLOR="$COLOR_SUCCESS"
     NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Clean, замер 2.0s) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   fi
 }
@@ -1279,12 +1352,17 @@ ping_host() {
 iperf_speed_test() {
   local host="$1"
   local fallback_host="${2:-}"
+  local label="$3"
+  local ping_val="$4"
   local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
 
   local target_hosts=("$host")
   if [[ -n "$fallback_host" && "$fallback_host" != "$host" ]]; then
     target_hosts+=("$fallback_host")
   fi
+
+  local time_dl="$IPERF_TIME_DL"
+  local time_ul="$IPERF_TIME_UL"
 
   for cur_host in "${target_hosts[@]}"; do
     for p in "${ports[@]}"; do
@@ -1293,42 +1371,53 @@ iperf_speed_test() {
         continue
       fi
 
-      # 1. Try --bidir first (duplex test in 1.5s, 2 parallel streams)
-      local res
-      res=$(timeout 3 iperf3 -c "$cur_host" -p "$p" -t 1.5 -P 2 --bidir -J 2>/dev/null || echo "")
-      if [[ -n "$res" ]] && jq -e '.end.sum_sent_bidir_reverse.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
-        local tx_bps rx_bps dl ul
-        tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
-        rx_bps=$(jq -r '.end.sum_sent_bidir_reverse.bits_per_second // 0' <<<"$res")
-        if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-          dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-          ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-          local note=""
-          if [[ "$cur_host" == "$fallback_host" ]]; then note=" (F)"; fi
-          echo "↓ $dl / ↑ $ul$note"
-          return
+      # 1. Download (Server -> Client, Reverse mode -R)
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+        if [[ -n "$COLOR_WARN" ]]; then
+          printf "  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$time_dl"
+        else
+          printf "  %s  %s  * Замер DL (%ss)...\r" \
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$time_dl"
         fi
       fi
 
-      # 2. If --bidir not supported, test TX then RX (-R)
-      res=$(timeout 2.5 iperf3 -c "$cur_host" -p "$p" -t 1.5 -P 2 -J 2>/dev/null || echo "")
-      if [[ -n "$res" ]] && jq -e '.end.sum_sent.bits_per_second' >/dev/null 2>&1 <<<"$res"; then
-        local tx_bps rx_bps dl="—" ul="—"
-        tx_bps=$(jq -r '.end.sum_sent.bits_per_second // 0' <<<"$res")
-        if (( $(awk -v a="$tx_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-          dl=$(awk -v b="$tx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-
-          local res_rx
-          res_rx=$(timeout 2.5 iperf3 -c "$cur_host" -p "$p" -R -t 1.5 -P 2 -J 2>/dev/null || echo "")
-          if [[ -n "$res_rx" ]] && jq -e '.end.sum_received.bits_per_second' >/dev/null 2>&1 <<<"$res_rx"; then
-            rx_bps=$(jq -r '.end.sum_received.bits_per_second // 0' <<<"$res_rx")
-            ul=$(awk -v b="$rx_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
-          fi
-          local note=""
-          if [[ "$cur_host" == "$fallback_host" ]]; then note=" (F)"; fi
-          echo "↓ $dl / ↑ $ul$note"
-          return
+      local res_dl dl_bps dl="—"
+      res_dl=$(timeout $((time_dl + 3)) iperf3 -c "$cur_host" -p "$p" -R -t "$time_dl" -P 2 -J 2>/dev/null || echo "")
+      if [[ -n "$res_dl" ]]; then
+        dl_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_dl")
+        if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+          dl=$(awk -v b="$dl_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
         fi
+      fi
+
+      # 2. Upload (Client -> Server, Normal mode)
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+        local dl_hint="↓ $dl"
+        if [[ "$dl" == "—" ]]; then dl_hint="DL —"; fi
+        if [[ -n "$COLOR_WARN" ]]; then
+          printf "  %s  %s  \033[%sm⏳ Замер UL (%ss) [%s]...\033[0m\r" \
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$time_ul" "$dl_hint"
+        else
+          printf "  %s  %s  * Замер UL (%ss) [%s]...\r" \
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$time_ul" "$dl_hint"
+        fi
+      fi
+
+      local res_ul ul_bps ul="—"
+      res_ul=$(timeout $((time_ul + 3)) iperf3 -c "$cur_host" -p "$p" -t "$time_ul" -P 2 -J 2>/dev/null || echo "")
+      if [[ -n "$res_ul" ]]; then
+        ul_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_ul")
+        if (( $(awk -v a="$ul_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+          ul=$(awk -v b="$ul_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+        fi
+      fi
+
+      if [[ "$dl" != "—" || "$ul" != "—" ]]; then
+        local note=""
+        if [[ "$cur_host" == "$fallback_host" ]]; then note=" (F)"; fi
+        echo "↓ $dl / ↑ $ul$note"
+        return
       fi
     done
   done
@@ -1360,30 +1449,62 @@ measure_ru_pings() {
 }
 
 measure_ru_iperf() {
-  test_region_speed() {
-    local label="$1" ping_val="$2" host="$3" fallback_host="$4"
+  local regions=(
+    "Москва (Центр, Hostkey / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"spd-rudp.hostkey.ru"$'\t'"st.tver.ertelecom.ru"
+    "Санкт-Петербург (Северо-Запад, SPB)"$'\t'"$RU_PING_SPB"$'\t'"st.spb.ertelecom.ru"$'\t'"st.yar.ertelecom.ru"
+    "Казань (Поволжье, ER-Telecom)"$'\t'"$RU_PING_KZN"$'\t'"st.kzn.ertelecom.ru"$'\t'"st.chelny.ertelecom.ru"
+    "Ростов-на-Дону (Юг, ER-Telecom)"$'\t'"$RU_PING_ROSTOV"$'\t'"st.rostov.ertelecom.ru"$'\t'"st.volgograd.ertelecom.ru"
+    "Екатеринбург (Урал, ER-Telecom)"$'\t'"$RU_PING_EKAT"$'\t'"st.ekat.ertelecom.ru"$'\t'"st.chel.ertelecom.ru"
+    "Новосибирск (Сибирь, ER-Telecom)"$'\t'"$RU_PING_NSK"$'\t'"st.nsk.ertelecom.ru"$'\t'"st.tomsk.ertelecom.ru"
+    "Иркутск (Восточная Сибирь, ER)"$'\t'"$RU_PING_IRK"$'\t'"st.irkutsk.ertelecom.ru"$'\t'"st.krsk.ertelecom.ru"
+  )
+
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    printf "  %s  %s  %s\n" \
+      "$(pad_str "Регион (Узел связи)" 38)" \
+      "$(pad_str "Задержка (RTT)" 14)" \
+      "Скорость (↓ DL / ↑ UL)"
+    printf "  %s  %s  %s\n" \
+      "$(pad_str "--------------------------------------" 38)" \
+      "$(pad_str "--------------" 14)" \
+      "-----------------------"
+  fi
+
+  for reg_entry in "${regions[@]}"; do
+    IFS=$'\t' read -r label ping_val host fallback_host <<<"$reg_entry"
     local speed="—"
 
     if [[ "$RUN_IPERF" == "true" || "$RUN_FULL_IPERF" == "true" ]] && is_command_available "iperf3"; then
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        printf "  \033[1;33m⏳\033[0m Замер скорости iPerf3: \033[1;97m%s\033[0m (%s)...\r" "$label" "$ping_val"
-      fi
-      speed=$(iperf_speed_test "$host" "$fallback_host")
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        printf "\r\033[2K\r"
-      fi
+      speed=$(iperf_speed_test "$host" "$fallback_host" "$label" "$ping_val")
     fi
 
     ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
-  }
 
-  test_region_speed "Москва (Центр, Hostkey / MSK-IX)" "$RU_PING_MSK" "spd-rudp.hostkey.ru" "st.tver.ertelecom.ru"
-  test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" "st.yar.ertelecom.ru"
-  test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" "st.chelny.ertelecom.ru"
-  test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" "st.volgograd.ertelecom.ru"
-  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" "st.chel.ertelecom.ru"
-  test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" "st.tomsk.ertelecom.ru"
-  test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" "st.krsk.ertelecom.ru"
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      if [[ -t 1 ]]; then
+        printf "\r\033[2K  %s  %s  %s\n" \
+          "$(pad_str "$label" 38)" \
+          "$(pad_str "$(format_value "$ping_val")" 14)" \
+          "$(format_value "$speed")"
+      else
+        printf "  %s  %s  %s\n" \
+          "$(pad_str "$label" 38)" \
+          "$(pad_str "$ping_val" 14)" \
+          "$speed"
+      fi
+    fi
+  done
+
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    if ! is_command_available "iperf3"; then
+      if [[ -n "$COLOR_NULL" ]]; then
+        printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
+      else
+        printf "  * Для замера пропускной способности iPerf3: apt install -y iperf3\n"
+      fi
+    fi
+    printf "\n"
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -1417,9 +1538,17 @@ format_table() {
 }
 
 print_header() {
-  printf "\033[1;36m================================================================================\033[0m\n"
-  printf " 🇷🇺 \033[1;97mNodeCheck (RU Edition) - Node & Network Quality Auditor v%s\033[0m\n" "$SCRIPT_VERSION"
-  printf "\033[1;36m================================================================================\033[0m\n"
+  local line_sep
+  line_sep=$(printf '%0.s=' {1..80})
+  if [[ -n "$COLOR_INFO" ]]; then
+    printf "\033[%sm%s\033[0m\n" "$COLOR_INFO" "$line_sep"
+    printf " 🇷🇺 \033[%smNodeCheck (RU Edition) - Node & Network Quality Auditor v%s\033[0m\n" "$COLOR_BOLD" "$SCRIPT_VERSION"
+    printf "\033[%sm%s\033[0m\n" "$COLOR_INFO" "$line_sep"
+  else
+    printf "%s\n" "$line_sep"
+    printf " 🇷🇺 NodeCheck (RU Edition) - Node & Network Quality Auditor v%s\n" "$SCRIPT_VERSION"
+    printf "%s\n" "$line_sep"
+  fi
   {
     echo -e " IPv4:\t$(bold "${EXTERNAL_IPV4:-N/A}")"
     if [[ -n "$EXTERNAL_IPV6" ]]; then
@@ -1438,7 +1567,11 @@ print_header() {
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
   } | format_table
-  printf "\033[1;36m================================================================================\033[0m\n\n"
+  if [[ -n "$COLOR_INFO" ]]; then
+    printf "\033[%sm%s\033[0m\n\n" "$COLOR_INFO" "$line_sep"
+  else
+    printf "%s\n\n" "$line_sep"
+  fi
 }
 
 calculate_geoip_stats() {
@@ -1468,7 +1601,20 @@ calculate_geoip_stats() {
   top_pct=$(awk "BEGIN { printf \"%.1f\", ($top_count / $total) * 100 }")
   local top_country="${COUNTRY_NAMES[$top_code]:-Unknown}"
 
-  printf "  Консенсус: \033[1;32m%s (%s)\033[0m — %s/%s (%s%%)\n\n" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
+  local consensus_color="$COLOR_SUCCESS"
+  local top_pct_int
+  top_pct_int=$(awk "BEGIN { print int(($top_count / $total) * 100) }")
+  if (( top_pct_int < 50 )); then
+    consensus_color="$COLOR_DANGER"
+  elif (( top_pct_int < 80 )); then
+    consensus_color="$COLOR_WARN"
+  fi
+
+  if [[ -n "$consensus_color" ]]; then
+    printf "  Консенсус: \033[%sm%s (%s)\033[0m — %s/%s (%s%%)\n\n" "$consensus_color" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
+  else
+    printf "  Консенсус: %s (%s) — %s/%s (%s%%)\n\n" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
+  fi
 
   {
     echo -e "  Код\tСтрана\tДоля (IPv4)"
@@ -1486,7 +1632,7 @@ calculate_geoip_stats() {
 }
 
 print_geoip_table() {
-  printf "\033[1;97m1. 🌐 Консенсус GeoIP баз данных (18 источников)\033[0m\n"
+  printf "\033[1m1. 📍 Консенсус GeoIP баз данных (18 источников)\033[0m\n"
   if [[ $IPV6_SUPPORTED -eq 1 ]]; then
     {
       echo -e "  База данных\tIPv4\tIPv6"
@@ -1511,7 +1657,7 @@ print_geoip_table() {
 }
 
 print_western_unblock_table() {
-  printf "\033[1;97m2. 🌐 Доступность зарубежных сервисов (Western Services)\033[0m\n"
+  printf "\033[1m2. 🌍 Доступность зарубежных сервисов (Western Services)\033[0m\n"
   {
     echo -e "  Сервис\tСтатус"
     echo -e "  ------------------------------------\t------"
@@ -1524,7 +1670,7 @@ print_western_unblock_table() {
 }
 
 print_ru_local_table() {
-  printf "\033[1;97m3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
+  printf "\033[1m3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
   {
     echo -e "  Сервис\tСтатус"
     echo -e "  ------------------------------------\t------"
@@ -1546,9 +1692,72 @@ print_connectivity_table() {
     done
   } | format_table
   if ! is_command_available "iperf3"; then
-    printf "  \033[0;90m* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n"
+    if [[ -n "$COLOR_NULL" ]]; then
+      printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
+    else
+      printf "  * Для замера пропускной способности iPerf3: apt install -y iperf3\n"
+    fi
   fi
   printf "\n"
+}
+
+print_executive_summary() {
+  local ru_total=${#ARR_RU_LOCAL[@]}
+  local ru_ok=0
+  for row in "${ARR_RU_LOCAL[@]}"; do
+    IFS=$'\t' read -r _ val <<<"$row"
+    if [[ "$val" == "OK"* ]]; then
+      ru_ok=$((ru_ok + 1))
+    fi
+  done
+
+  local west_total=${#ARR_RU_UNBLOCK[@]}
+  local west_ok=0
+  for row in "${ARR_RU_UNBLOCK[@]}"; do
+    IFS=$'\t' read -r _ val <<<"$row"
+    if [[ "$val" != "No"* ]]; then
+      west_ok=$((west_ok + 1))
+    fi
+  done
+
+  local line_sep
+  line_sep=$(printf '%0.s─' {1..80})
+  if [[ -n "$COLOR_INFO" ]]; then
+    printf "\033[%sm%s\033[0m\n" "$COLOR_INFO" "$line_sep"
+    printf " \033[1m📊 Итоговый вердикт качества ноды под аудиторию РФ\033[0m\n"
+    printf "\033[%sm%s\033[0m\n" "$COLOR_INFO" "$line_sep"
+  else
+    printf "%s\n" "$line_sep"
+    printf " 📊 Итоговый вердикт качества ноды под аудиторию РФ\n"
+    printf "%s\n" "$line_sep"
+  fi
+
+  local verdict_str verdict_color
+  if [[ "$NODE_RKN_STATUS" == *"BLOCKED"* ]]; then
+    verdict_str="Критично: IP ноды заблокирован в РФ (реестр РКН)"
+    verdict_color="$COLOR_DANGER"
+  elif (( ru_ok >= 11 && west_ok >= 16 )); then
+    verdict_str="Отлично: подходит для VPN/прокси под РФ (доступ к Западу + нет гео-блокировок РФ)"
+    verdict_color="$COLOR_SUCCESS"
+  elif (( ru_ok >= 8 && west_ok >= 12 )); then
+    verdict_str="Удовлетворительно: базовые сервисы доступны, возможны ограничения части сервисов"
+    verdict_color="$COLOR_WARN"
+  else
+    verdict_str="Проблемная нода: высокий риск блокировок или утечек региона"
+    verdict_color="$COLOR_DANGER"
+  fi
+
+  {
+    echo -e "  Вердикт качества:\t$(color "$verdict_color" "$verdict_str")"
+    echo -e "  Зарубежные сервисы:\t$(format_value "$west_ok/$west_total доступны")"
+    echo -e "  Ресурсы РФ (Reverse Geo):\t$(format_value "$ru_ok/$ru_total открываются")"
+    echo -e "  Репутация IP и РКН:\t$NODE_RKN_STATUS | $NODE_RISK"
+  } | format_table
+  if [[ -n "$COLOR_INFO" ]]; then
+    printf "\033[%sm%s\033[0m\n\n" "$COLOR_INFO" "$line_sep"
+  else
+    printf "%s\n\n" "$line_sep"
+  fi
 }
 
 build_json() {
@@ -1632,26 +1841,29 @@ build_json() {
 
 display_help() {
   cat <<EOF
-Usage: nodecheck.sh [OPTIONS]
+Использование: nodecheck.sh [ОПЦИИ]
 
-NodeCheck (RU Edition) - Node & Network Quality Auditor
+NodeCheck (RU Edition) — комплексный аудит серверных нод и сетевого стека под РФ
 
-Options:
-  -h, --help               Show this help message and exit
-  -v, --verbose            Enable verbose logging
-  -d, --debug              Enable debug mode (saves trace to $DEBUG_LOG_FILE)
-  -j, --json               Output results in pure JSON format
-  --no-iperf               Skip iPerf3 speedtest (latency ping only)
-  -p, --proxy ADDR         Use SOCKS5/SOCKS5h proxy (format: host:port)
-  -i, --interface IF       Bind requests to network interface (e.g. eth0, ens3)
-  --no-doh                 Disable DNS-over-HTTPS (use system resolver)
-  --doh PROVIDER           Select DoH provider: cloudflare, quad9, adguard
+Опции:
+  -h, --help               Показать эту справку и выйти
+  -j, --json               Вывод результатов в чистом формате JSON
+  --no-iperf               Пропустить замер скорости iPerf3 (только пинг)
+  --full-iperf             Полный тест iPerf3 (по 5с на DL и UL)
+  --iperf-time СЕК         Время замера iPerf3 (по умолч.: 5с DL / 3с UL)
+  --no-color               Отключить цветовое форматирование ANSI
+  -p, --proxy АДРЕС        Использовать SOCKS5/SOCKS5h прокси (хост:порт)
+  -i, --interface ИНТЕРФЕЙС Привязать запросы к сетевому интерфейсу (eth0, ens3)
+  --no-doh                 Отключить DNS-over-HTTPS (системный резолвер)
+  --doh ПРОВАЙДЕР          Выбор DoH: cloudflare, quad9, adguard
+  -v, --verbose            Подробное логирование сетевых запросов
+  -d, --debug              Режим отладки (сохранение трассировки в $DEBUG_LOG_FILE)
 
-Examples:
-  ./nodecheck.sh                         # Run full audit (Hardware, GeoIP, Services, All-RU Speed)
-  ./nodecheck.sh --no-iperf              # Run audit without bandwidth speedtest
-  ./nodecheck.sh -p 127.0.0.1:1080       # Audit node via SOCKS5 proxy
-  ./nodecheck.sh -j                      # Output pure JSON
+Примеры:
+  ./nodecheck.sh                         # Полный аудит (железо, GeoIP, сервисы, пинг и iPerf3)
+  ./nodecheck.sh --no-iperf              # Быстрый аудит без замера скорости (~10-12 секунд)
+  ./nodecheck.sh -j                      # Вывод в формате JSON для мониторинга и ботов
+  ./nodecheck.sh --no-color > report.txt # Сохранение чистого отчета без ANSI-кодов
 
 EOF
 }
@@ -1681,18 +1893,32 @@ parse_arguments() {
         ;;
       --full-iperf)
         RUN_FULL_IPERF=true
+        IPERF_TIME_DL=5
+        IPERF_TIME_UL=5
+        shift
+        ;;
+      --iperf-time)
+        if [[ $# -lt 2 || "$2" =~ [^0-9] ]]; then
+          error_exit "Для опции $1 требуется число секунд"
+        fi
+        IPERF_TIME_DL="$2"
+        IPERF_TIME_UL="$2"
+        shift 2
+        ;;
+      --no-color)
+        NO_COLOR_MODE=true
         shift
         ;;
       -p|--proxy)
         if [[ $# -lt 2 || "$2" == -* ]]; then
-          error_exit "Option $1 requires an argument (host:port)"
+          error_exit "Для опции $1 требуется аргумент (хост:порт)"
         fi
         PROXY_ADDR="$2"
         shift 2
         ;;
       -i|--interface)
         if [[ $# -lt 2 || "$2" == -* ]]; then
-          error_exit "Option $1 requires an argument (interface name)"
+          error_exit "Для опции $1 требуется аргумент (имя интерфейса)"
         fi
         INTERFACE_NAME="$2"
         shift 2
@@ -1703,13 +1929,13 @@ parse_arguments() {
         ;;
       --doh)
         if [[ $# -lt 2 || "$2" == -* ]]; then
-          error_exit "Option $1 requires an argument (cloudflare|quad9|adguard)"
+          error_exit "Для опции $1 требуется аргумент (cloudflare|quad9|adguard)"
         fi
         CUSTOM_DOH_PROVIDER="$2"
         shift 2
         ;;
       *)
-        error_exit "Unknown option: $1"
+        error_exit "Неизвестная опция: $1 (используйте --help для справки)"
         ;;
     esac
   done
@@ -1717,10 +1943,11 @@ parse_arguments() {
 
 main() {
   parse_arguments "$@"
+  init_colors
 
   TMP_WORK_DIR=$(mktemp -d "/tmp/nodecheck.XXXXXX" 2>/dev/null || mktemp -d)
   if [[ -z "$TMP_WORK_DIR" || ! -d "$TMP_WORK_DIR" ]]; then
-    error_exit "Failed to create secure temporary directory"
+    error_exit "Не удалось создать защищенный временный каталог в /tmp"
   fi
   trap cleanup EXIT
   trap 'cleanup; exit 130' INT
@@ -1730,28 +1957,36 @@ main() {
   check_doh
 
   # 1. External IP & Node Parameters
+  progress_status "Определение внешнего IP и параметров хоста"
   discover_external_ips
 
   if [[ -z "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
-    error_exit "No active internet connection or external IP detected."
+    progress_clear
+    error_exit "Нет активного подключения к сети или внешний IP не определен."
   fi
 
   get_vpn_node_info
+  progress_status "Анализ CPU Steal, памяти и виртуализации"
   get_system_specs
+  progress_clear
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_header
   fi
 
   # 2. 18 GeoIP Databases
+  progress_status "Опрос 18 баз GeoIP (параллельно)"
   run_geoip_consensus
+  progress_clear
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_geoip_table
   fi
 
   # 3. Western Services & RU Local Services
+  progress_status "Проверка доступности 34 сервисов (зарубежные и РФ)"
   run_services_check
+  progress_clear
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_western_unblock_table
@@ -1759,15 +1994,17 @@ main() {
   fi
 
   # 4. Multi-Region Pings & Speedtest
+  progress_status "Замер задержки RTT до 7 регионов РФ"
   measure_ru_pings
+  progress_clear
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1;97m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+    printf "\033[1m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
   fi
   measure_ru_iperf
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    print_connectivity_table
+    print_executive_summary
   fi
 
   if [[ "$JSON_OUTPUT" == "true" ]]; then

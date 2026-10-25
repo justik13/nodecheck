@@ -45,4 +45,5 @@ jobs:
           ./nodecheck.sh --help
           ./vpncheck.sh --help
           ./ipregion.sh --help
+          ./nodecheck.sh --help --no-color
           ./nodecheck.sh -j --no-iperf

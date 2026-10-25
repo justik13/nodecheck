@@ -49,7 +49,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 
 ```text
 ================================================================================
- 🇷🇺 NodeCheck (RU Edition) - Node & Network Quality Auditor v3.3.0-ru
+ 🇷🇺 NodeCheck (RU Edition) - Node & Network Quality Auditor v3.4.0-ru
 ================================================================================
  IPv4:             168.222.254.191
  IPv6:             None (Not configured)
@@ -65,7 +65,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
  Сетевой стек:     BBR: Active | UDP: Open (DNS Bidirectional) | Port 25: Open
 ================================================================================
 
-1. 🌐 Консенсус GeoIP баз данных (18 источников)
+1. 📍 Консенсус GeoIP баз данных (18 источников)
   База данных                   Страна (IPv4)
   ----------------------------  -------------
   IPinfo.io                     DE
@@ -95,7 +95,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
   US   United States  11.1% (2/18)
   IN   India          5.6% (1/18)
 
-2. 🌐 Доступность зарубежных сервисов (Western Services)
+2. 🌍 Доступность зарубежных сервисов (Western Services)
   Сервис                                Статус
   ------------------------------------  ------
   Instagram (Meta)                      Yes
@@ -147,6 +147,15 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
   Екатеринбург (Урал, ER-Telecom)       66.6 ms         ↓ 191 Mbps / ↑ 380 Mbps
   Новосибирск (Сибирь, ER-Telecom)      94.0 ms         ↓ 151 Mbps / ↑ 1049 Mbps
   Иркутск (Восточная Сибирь, ER)        116.4 ms        ↓ 88 Mbps / ↑ 564 Mbps
+
+────────────────────────────────────────────────────────────────────────────────
+ 📊 Итоговый вердикт качества ноды под аудиторию РФ
+────────────────────────────────────────────────────────────────────────────────
+  Вердикт качества:          Отлично: подходит для VPN/прокси под РФ (доступ к Западу + нет гео-блокировок РФ)
+  Зарубежные сервисы:        18/20 доступны
+  Ресурсы РФ (Reverse Geo):  10/14 открываются
+  Репутация IP и РКН:        Clean (Not in Registry) | Clean / Low Risk (0/100)
+────────────────────────────────────────────────────────────────────────────────
 ```
 
 ---
@@ -157,6 +166,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 | :--- | :--- |
 | `-h`, `--help` | Справка по всем опциям |
 | `--no-iperf` | Пропустить замер скорости iPerf3 (только пинг) |
+| `--full-iperf` | Полный тест iPerf3 (по 5с на DL и UL) |
+| `--iperf-time SECS` | Время замера iPerf3 (по умолч.: 5с DL / 3с UL) |
+| `--no-color` | Отключить цветовое форматирование ANSI |
 | `-j`, `--json` | Вывод в формате JSON (для ботов и мониторинга) |
 | `-p`, `--proxy ADDR` | Проверка ноды через SOCKS5 (`127.0.0.1:1080`) |
 | `-i`, `--interface IF` | Привязка запросов к интерфейсу (`ens3`, `eth0`) |
