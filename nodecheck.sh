@@ -11,7 +11,7 @@
 
 set -o pipefail
 
-SCRIPT_VERSION="3.4.0-ru"
+SCRIPT_VERSION="3.4.1-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -1349,13 +1349,22 @@ ping_host() {
   fi
 }
 
-iperf_speed_test() {
-  local host="$1"
-  local fallback_host="${2:-}"
-  local label="$3"
-  local ping_val="$4"
-  local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
+run_region_speed_test() {
+  local label="$1" ping_val="$2" host="$3" fallback_host="${4:-}"
+  local speed="—"
 
+  if [[ "$RUN_IPERF" != "true" && "$RUN_FULL_IPERF" != "true" ]] || ! is_command_available "iperf3"; then
+    ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"—" )
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "  %s  %s  %s\n" \
+        "$(pad_str "$label" 38)" \
+        "$(pad_str "$(format_value "$ping_val")" 14)" \
+        "$(format_value "—")"
+    fi
+    return
+  fi
+
+  local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
   local target_hosts=("$host")
   if [[ -n "$fallback_host" && "$fallback_host" != "$host" ]]; then
     target_hosts+=("$fallback_host")
@@ -1363,6 +1372,7 @@ iperf_speed_test() {
 
   local time_dl="$IPERF_TIME_DL"
   local time_ul="$IPERF_TIME_UL"
+  local best_dl="—" best_ul="—" best_note=""
 
   for cur_host in "${target_hosts[@]}"; do
     for p in "${ports[@]}"; do
@@ -1384,6 +1394,9 @@ iperf_speed_test() {
 
       local res_dl dl_bps dl="—"
       res_dl=$(timeout $((time_dl + 3)) iperf3 -c "$cur_host" -p "$p" -R -t "$time_dl" -P 2 -J 2>/dev/null || echo "")
+      if [[ -z "$res_dl" || "$res_dl" == *"error"* ]]; then
+        res_dl=$(timeout $((time_dl + 3)) iperf3 -c "$cur_host" -p "$p" -R -t "$time_dl" -J 2>/dev/null || echo "")
+      fi
       if [[ -n "$res_dl" ]]; then
         dl_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_dl")
         if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
@@ -1406,6 +1419,9 @@ iperf_speed_test() {
 
       local res_ul ul_bps ul="—"
       res_ul=$(timeout $((time_ul + 3)) iperf3 -c "$cur_host" -p "$p" -t "$time_ul" -P 2 -J 2>/dev/null || echo "")
+      if [[ -z "$res_ul" || "$res_ul" == *"error"* ]]; then
+        res_ul=$(timeout $((time_ul + 3)) iperf3 -c "$cur_host" -p "$p" -t "$time_ul" -J 2>/dev/null || echo "")
+      fi
       if [[ -n "$res_ul" ]]; then
         ul_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_ul")
         if (( $(awk -v a="$ul_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
@@ -1413,16 +1429,41 @@ iperf_speed_test() {
         fi
       fi
 
-      if [[ "$dl" != "—" || "$ul" != "—" ]]; then
-        local note=""
-        if [[ "$cur_host" == "$fallback_host" ]]; then note=" (F)"; fi
-        echo "↓ $dl / ↑ $ul$note"
-        return
+      if [[ "$cur_host" == "$fallback_host" ]]; then best_note=" (F)"; fi
+
+      if [[ "$dl" != "—" && "$ul" != "—" ]]; then
+        best_dl="$dl"
+        best_ul="$ul"
+        break 2
+      elif [[ "$dl" != "—" && "$best_dl" == "—" ]]; then
+        best_dl="$dl"
+      elif [[ "$ul" != "—" && "$best_ul" == "—" ]]; then
+        best_ul="$ul"
       fi
     done
   done
 
-  echo "—"
+  if [[ "$best_dl" != "—" || "$best_ul" != "—" ]]; then
+    speed="↓ $best_dl / ↑ $best_ul$best_note"
+  else
+    speed="—"
+  fi
+
+  ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
+
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    if [[ -t 1 ]]; then
+      printf "\r\033[2K  %s  %s  %s\n" \
+        "$(pad_str "$label" 38)" \
+        "$(pad_str "$(format_value "$ping_val")" 14)" \
+        "$(format_value "$speed")"
+    else
+      printf "  %s  %s  %s\n" \
+        "$(pad_str "$label" 38)" \
+        "$(pad_str "$ping_val" 14)" \
+        "$speed"
+    fi
+  fi
 }
 
 measure_ru_pings() {
@@ -1430,7 +1471,7 @@ measure_ru_pings() {
   mkdir -p "$p_dir"
 
   # Ping 7 macro-regions across Russia in parallel
-  ( ping_host "spd-rudp.hostkey.ru" "$p_dir/msk" ) &
+  ( ping_host "st.msk.ertelecom.ru" "$p_dir/msk" ) &
   ( ping_host "st.spb.ertelecom.ru" "$p_dir/spb" ) &
   ( ping_host "st.kzn.ertelecom.ru" "$p_dir/kzn" ) &
   ( ping_host "st.rostov.ertelecom.ru" "$p_dir/rostov" ) &
@@ -1450,7 +1491,7 @@ measure_ru_pings() {
 
 measure_ru_iperf() {
   local regions=(
-    "Москва (Центр, Hostkey / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"spd-rudp.hostkey.ru"$'\t'"st.tver.ertelecom.ru"
+    "Москва (Центр, ER-Telecom / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"st.msk.ertelecom.ru"$'\t'"spd-rudp.hostkey.ru"
     "Санкт-Петербург (Северо-Запад, SPB)"$'\t'"$RU_PING_SPB"$'\t'"st.spb.ertelecom.ru"$'\t'"st.yar.ertelecom.ru"
     "Казань (Поволжье, ER-Telecom)"$'\t'"$RU_PING_KZN"$'\t'"st.kzn.ertelecom.ru"$'\t'"st.chelny.ertelecom.ru"
     "Ростов-на-Дону (Юг, ER-Telecom)"$'\t'"$RU_PING_ROSTOV"$'\t'"st.rostov.ertelecom.ru"$'\t'"st.volgograd.ertelecom.ru"
@@ -1472,27 +1513,7 @@ measure_ru_iperf() {
 
   for reg_entry in "${regions[@]}"; do
     IFS=$'\t' read -r label ping_val host fallback_host <<<"$reg_entry"
-    local speed="—"
-
-    if [[ "$RUN_IPERF" == "true" || "$RUN_FULL_IPERF" == "true" ]] && is_command_available "iperf3"; then
-      speed=$(iperf_speed_test "$host" "$fallback_host" "$label" "$ping_val")
-    fi
-
-    ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
-
-    if [[ "$JSON_OUTPUT" != "true" ]]; then
-      if [[ -t 1 ]]; then
-        printf "\r\033[2K  %s  %s  %s\n" \
-          "$(pad_str "$label" 38)" \
-          "$(pad_str "$(format_value "$ping_val")" 14)" \
-          "$(format_value "$speed")"
-      else
-        printf "  %s  %s  %s\n" \
-          "$(pad_str "$label" 38)" \
-          "$(pad_str "$ping_val" 14)" \
-          "$speed"
-      fi
-    fi
+    run_region_speed_test "$label" "$ping_val" "$host" "$fallback_host"
   done
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then

@@ -49,7 +49,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 
 ```text
 ================================================================================
- 🇷🇺 NodeCheck (RU Edition) - Node & Network Quality Auditor v3.4.0-ru
+ 🇷🇺 NodeCheck (RU Edition) - Node & Network Quality Auditor v3.4.1-ru
 ================================================================================
  IPv4:             168.222.254.191
  IPv6:             None (Not configured)
