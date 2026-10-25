@@ -65,6 +65,7 @@ NODE_RAM=""
 NODE_DISK=""
 NODE_CPU_STEAL="0.0%"
 NODE_CPU_STEAL_NUM="0.0"
+NODE_CPU_STEAL_ALLTIME="0.0"
 NODE_CPU_STEAL_COLOR="1;32"
 
 WL_NODE_ROLE=""
@@ -619,15 +620,22 @@ get_system_specs() {
     NODE_DISK="N/A"
   fi
 
-  # 5. CPU Steal measurement (0.5s delta)
-  local u1 n1 s1 i1 w1 x1 q1 st1 u2 n2 s2 i2 w2 x2 q2 st2
+  # 5. CPU Steal measurement (Accurate 2.0s delta sample + all-time uptime ticks)
+  local u1 n1 s1 i1 w1 x1 q1 st1 g1 gn1 u2 n2 s2 i2 w2 x2 q2 st2 g2 gn2
   if [[ -r /proc/stat ]]; then
-    read -r _ u1 n1 s1 i1 w1 x1 q1 st1 _ < /proc/stat
-    sleep 0.5
-    read -r _ u2 n2 s2 i2 w2 x2 q2 st2 _ < /proc/stat
-    local total1=$((u1 + n1 + s1 + i1 + w1 + x1 + q1 + st1))
-    local total2=$((u2 + n2 + s2 + i2 + w2 + x2 + q2 + st2))
-    local diff_total=$((total2 - total1))
+    read -r _ u1 n1 s1 i1 w1 x1 q1 st1 g1 gn1 _ < /proc/stat
+    local total_boot=$((u1 + n1 + s1 + i1 + w1 + x1 + q1 + st1 + ${g1:-0} + ${gn1:-0}))
+    if (( total_boot > 0 )); then
+      NODE_CPU_STEAL_ALLTIME=$(awk -v s="$st1" -v t="$total_boot" 'BEGIN { printf "%.2f", (s/t)*100 }')
+    else
+      NODE_CPU_STEAL_ALLTIME="0.00"
+    fi
+
+    sleep 2.0
+
+    read -r _ u2 n2 s2 i2 w2 x2 q2 st2 g2 gn2 _ < /proc/stat
+    local total2=$((u2 + n2 + s2 + i2 + w2 + x2 + q2 + st2 + ${g2:-0} + ${gn2:-0}))
+    local diff_total=$((total2 - total_boot))
     local diff_steal=$((st2 - st1))
     if (( diff_total > 0 )); then
       NODE_CPU_STEAL_NUM=$(awk -v s="$diff_steal" -v t="$diff_total" 'BEGIN { printf "%.1f", (s/t)*100 }')
@@ -636,19 +644,23 @@ get_system_specs() {
     fi
   else
     NODE_CPU_STEAL_NUM="0.0"
+    NODE_CPU_STEAL_ALLTIME="0.00"
   fi
 
   local steal_int
   steal_int=$(grep -oE '^[0-9]+' <<<"$NODE_CPU_STEAL_NUM" || echo "0")
-  if (( steal_int > 10 )); then
+  local alltime_int
+  alltime_int=$(grep -oE '^[0-9]+' <<<"$NODE_CPU_STEAL_ALLTIME" || echo "0")
+
+  if (( steal_int > 10 || alltime_int > 5 )); then
     NODE_CPU_STEAL_COLOR="1;31"
-    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (High Steal / Оверселл!)"
-  elif (( steal_int > 3 )); then
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (High Steal / Оверселл!) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
+  elif (( steal_int > 3 || alltime_int > 2 )); then
     NODE_CPU_STEAL_COLOR="1;33"
-    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Moderate)"
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Moderate) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   else
     NODE_CPU_STEAL_COLOR="1;32"
-    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Clean)"
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Clean, замер 2.0s) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   fi
 }
 
@@ -1799,6 +1811,7 @@ build_json() {
     --arg cpu_model "${NODE_CPU_MODEL:-}" \
     --arg cpu_cores "${NODE_CPU_CORES:-1}" \
     --arg cpu_steal "${NODE_CPU_STEAL_NUM:-0.0}" \
+    --arg cpu_steal_alltime "${NODE_CPU_STEAL_ALLTIME:-0.00}" \
     --arg ram "${NODE_RAM:-}" \
     --arg disk "${NODE_DISK:-}" \
     --arg country "${NODE_COUNTRY_CODE:-}" \
@@ -1832,6 +1845,7 @@ build_json() {
         cpu_model: $cpu_model,
         cpu_cores: ($cpu_cores | tonumber),
         cpu_steal_pct: ($cpu_steal | tonumber),
+        cpu_steal_all_time_pct: ($cpu_steal_alltime | tonumber),
         ram: $ram,
         disk: $disk
       },
