@@ -41,7 +41,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 7. **Готовность к режиму «Белых списков» (White List & Anycast CDN):** аудит доступности ключевых узлов белого списка (мессенджер MAX `max.ru`, Anycast Яндекс `yastatic.net`, VK Cloud, Госуслуги) и расчет RTT-порога для каскада VLESS XHTTP через Yandex Cloud CDN (предотвращение ошибок HTTP 504 Gateway Timeout).
 8. **Безопасность периметра и Anti-Active Probing:** аудит портов 80 и 443 на утечки доменных имен в HTTP-редиректах (`Location:`) и TLS-сертификатах (`CN/SAN`) цензурным роботам ТСПУ. Проверка соответствия SelfSteal SNI через `--sni`.
 9. **Связность и дуплексный iPerf3 по всей РФ:** замер задержки (RTT) и реальной пропускной способности (↓ DL / ↑ UL) до 7 макро-регионов РФ (Москва, Санкт-Петербург, Казань, Ростов-на-Дону, Екатеринбург, Новосибирск, Иркутск) с пулом портов 5201–5209.
-10. **Сетевой стек и реальный MTU:** статус TCP BBR, открытость UDP, считывание реального MTU сетевого интерфейса и Path MTU до шлюза без выдуманных ярлыков.
+10. **Сетевой стек:** статус TCP BBR, открытость UDP и отсутствие блокировки SMTP (порт 25).
 
 ---
 
@@ -62,7 +62,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
  Реестр РКН:       Clean (Not in Registry)
  Антифрод / Риск:  Clean / Low Risk (0/100), Google Captcha: Clean (No Captcha)
  Сетевой стек:     BBR: Active | UDP: Open (DNS Bidirectional) | Port 25: Open
- MTU сети:         1500 (Path MTU: 1476)
 ================================================================================
 
 1. 🌐 Консенсус GeoIP баз данных (18 источников)
