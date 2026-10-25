@@ -46,8 +46,9 @@ NODE_CAPTCHA_STATUS=""
 NODE_CAPTCHA_COLOR="NULL"
 NODE_RKN_STATUS="Checking..."
 NODE_RKN_COLOR="NULL"
-NODE_PMTU="Unknown"
-NODE_RECOMMENDED_MTU="1360"
+NODE_MTU="1500"
+NODE_PMTU_NUM="1500"
+NODE_IFACE_MTU="1500"
 NODE_BBR_STATUS=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
@@ -468,27 +469,33 @@ get_vpn_node_info() {
     NODE_UDP_STATUS="Blocked"
   fi
 
-  # Path MTU Detection (PMTU to Russian hubs)
+  # Network Interface MTU & Path MTU Detection
+  local iface
+  iface=$(ip route show default 2>/dev/null | awk '/default/ {print $5}' | head -n1)
+  if [[ -z "$iface" ]]; then iface="eth0"; fi
+  NODE_IFACE_MTU=$(cat "/sys/class/net/$iface/mtu" 2>/dev/null || echo "1500")
+  NODE_PMTU_NUM="$NODE_IFACE_MTU"
+
   if is_command_available ping; then
-    if ping -c 1 -M "do" -s 1472 -W 1 ya.ru >/dev/null 2>&1 || ping -c 1 -M "do" -s 1472 -W 1 77.88.55.242 >/dev/null 2>&1; then
-      NODE_PMTU="1500 (Standard Ethernet)"
-      NODE_RECOMMENDED_MTU="1420 (WG) / 1360 (AWG)"
-    elif ping -c 1 -M "do" -s 1392 -W 1 ya.ru >/dev/null 2>&1; then
-      NODE_PMTU="1420 (WireGuard)"
-      NODE_RECOMMENDED_MTU="1360 (Clamped)"
-    elif ping -c 1 -M "do" -s 1332 -W 1 ya.ru >/dev/null 2>&1; then
-      NODE_PMTU="1360 (PPPoE / Tunnel)"
-      NODE_RECOMMENDED_MTU="1280 (Min)"
-    elif ping -c 1 -M "do" -s 1252 -W 1 ya.ru >/dev/null 2>&1; then
-      NODE_PMTU="1280 (IPv6 Min / Mobile)"
-      NODE_RECOMMENDED_MTU="1240"
+    local ping_out
+    ping_out=$(ping -c 1 -M "do" -s "$((NODE_IFACE_MTU - 28))" -W 1 77.88.55.242 2>&1 || true)
+    if [[ "$ping_out" =~ mtu\ =\ ([0-9]+) ]]; then
+      NODE_PMTU_NUM="${BASH_REMATCH[1]}"
+    elif [[ "$ping_out" =~ mtu\ ([0-9]+) ]]; then
+      NODE_PMTU_NUM="${BASH_REMATCH[1]}"
     else
-      NODE_PMTU="Non-standard / ICMP Drop"
-      NODE_RECOMMENDED_MTU="1360 (Safe default)"
+      local cached_mtu
+      cached_mtu=$(ip route get 77.88.55.242 2>/dev/null | grep -oE 'mtu [0-9]+' | awk '{print $2}')
+      if [[ -n "$cached_mtu" && "$cached_mtu" =~ ^[0-9]+$ ]]; then
+        NODE_PMTU_NUM="$cached_mtu"
+      fi
     fi
+  fi
+
+  if [[ "$NODE_PMTU_NUM" != "$NODE_IFACE_MTU" ]]; then
+    NODE_MTU="${NODE_IFACE_MTU} (Path MTU: ${NODE_PMTU_NUM})"
   else
-    NODE_PMTU="N/A (ping not found)"
-    NODE_RECOMMENDED_MTU="1360"
+    NODE_MTU="${NODE_IFACE_MTU}"
   fi
 
   # RKN / Antifilter IP Registry Check
@@ -1640,7 +1647,7 @@ print_header() {
     echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
-    echo -e " Path MTU (PMTU):\t$(bold "$NODE_PMTU") (Рек. для WG: $NODE_RECOMMENDED_MTU)"
+    echo -e " MTU сети:\t$(bold "$NODE_MTU")"
     if [[ -n "$CHECK_SNI" ]]; then
       echo -e " SelfSteal SNI:\t$(color "$NODE_SNI_COLOR" "$NODE_SNI_STATUS")"
     fi
@@ -1834,8 +1841,8 @@ build_json() {
     --arg risk "${NODE_RISK:-}" \
     --arg captcha "${NODE_CAPTCHA_STATUS:-}" \
     --arg rkn "${NODE_RKN_STATUS:-}" \
-    --arg pmtu "${NODE_PMTU:-}" \
-    --arg rec_mtu "${NODE_RECOMMENDED_MTU:-}" \
+    --arg mtu "${NODE_IFACE_MTU:-1500}" \
+    --arg pmtu "${NODE_PMTU_NUM:-1500}" \
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
@@ -1863,7 +1870,7 @@ build_json() {
       },
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
-      network: { bbr: $bbr, udp: $udp, port25: $port25, pmtu: $pmtu, recommended_mtu: $rec_mtu },
+      network: { bbr: $bbr, udp: $udp, port25: $port25, mtu: ($mtu | tonumber), pmtu: ($pmtu | tonumber) },
       security: { zero_probe: $zero_probe, sni_status: $sni_status },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
       whitelist_readiness: $whitelist,
