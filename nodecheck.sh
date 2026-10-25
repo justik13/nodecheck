@@ -1248,6 +1248,25 @@ lookup_wildberries() {
   fi
 }
 
+lookup_ozon() {
+  local code body
+  code=$(curl_ru_code "https://www.ozon.ru" 4)
+  if [[ "$code" == "307" || "$code" =~ ^(200|301|302)$ ]]; then
+    body=$(curl_wrapper GET "https://www.ozon.ru" -k -L -b dummy --timeout 4 2>/dev/null)
+    if [[ "$body" == *"abt-challenge"* || "$body" == *"Выключите VPN"* || "$body" == *"Похоже, нет соединения"* ]]; then
+      echo "Blocked (Anti-VPN 403)"
+    else
+      echo "OK"
+    fi
+  elif [[ "$code" =~ ^(403|429)$ ]]; then
+    echo "Blocked (WAF $code)"
+  elif [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  else
+    echo "Blocked ($code)"
+  fi
+}
+
 lookup_kinopoisk() {
   local code
   code=$(curl_ru_code "https://www.kinopoisk.ru")
@@ -1292,6 +1311,7 @@ run_services_check() {
   ( lookup_alfabank > "$s_dir/alfabank" ) &
   ( lookup_avito > "$s_dir/avito" ) &
   ( lookup_wildberries > "$s_dir/wildberries" ) &
+  ( lookup_ozon > "$s_dir/ozon" ) &
   ( lookup_kinopoisk > "$s_dir/kinopoisk" ) &
 
   wait
@@ -1336,6 +1356,7 @@ run_services_check() {
   ARR_RU_LOCAL+=( "Альфа-Банк (alfabank.ru)"$'\t'"$(<"$s_dir/alfabank")" )
   ARR_RU_LOCAL+=( "Авито (avito.ru)"$'\t'"$(<"$s_dir/avito")" )
   ARR_RU_LOCAL+=( "Wildberries (wildberries.ru)"$'\t'"$(<"$s_dir/wildberries")" )
+  ARR_RU_LOCAL+=( "Озон (ozon.ru)"$'\t'"$(<"$s_dir/ozon")" )
   ARR_RU_LOCAL+=( "Кинопоиск (kinopoisk.ru)"$'\t'"$(<"$s_dir/kinopoisk")" )
 }
 
@@ -1439,17 +1460,10 @@ measure_ru_pings() {
 
 measure_ru_iperf() {
   test_region_speed() {
-    local label="$1" ping_val="$2" host="$3" fallback_host="$4" test_iperf_default="$5"
+    local label="$1" ping_val="$2" host="$3" fallback_host="$4"
     local speed="—"
 
-    local should_run=false
-    if [[ "$RUN_IPERF" == "true" ]] && is_command_available "iperf3"; then
-      if [[ "$RUN_FULL_IPERF" == "true" || "$test_iperf_default" == "true" ]]; then
-        should_run=true
-      fi
-    fi
-
-    if [[ "$should_run" == "true" ]]; then
+    if [[ "$RUN_IPERF" == "true" || "$RUN_FULL_IPERF" == "true" ]] && is_command_available "iperf3"; then
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
         printf "  \033[1;33m⏳\033[0m Замер скорости iPerf3: \033[1;97m%s\033[0m (%s)...\r" "$label" "$ping_val"
       fi
@@ -1457,20 +1471,18 @@ measure_ru_iperf() {
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
         printf "\r\033[2K\r"
       fi
-    elif [[ "$RUN_IPERF" == "true" && "$RUN_FULL_IPERF" != "true" ]]; then
-      speed="— (--full-iperf)"
     fi
 
     ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
   }
 
-  test_region_speed "Москва (Центр, Hostkey / MSK-IX)" "$RU_PING_MSK" "spd-rudp.hostkey.ru" "st.tver.ertelecom.ru" true
-  test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" "st.yar.ertelecom.ru" false
-  test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" "st.chelny.ertelecom.ru" false
-  test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" "st.volgograd.ertelecom.ru" false
-  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" "st.chel.ertelecom.ru" false
-  test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" "st.tomsk.ertelecom.ru" false
-  test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" "st.krsk.ertelecom.ru" false
+  test_region_speed "Москва (Центр, Hostkey / MSK-IX)" "$RU_PING_MSK" "spd-rudp.hostkey.ru" "st.tver.ertelecom.ru"
+  test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" "st.yar.ertelecom.ru"
+  test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" "st.chelny.ertelecom.ru"
+  test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" "st.volgograd.ertelecom.ru"
+  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" "st.chel.ertelecom.ru"
+  test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" "st.tomsk.ertelecom.ru"
+  test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" "st.krsk.ertelecom.ru"
 }
 
 # ------------------------------------------------------------------------------
