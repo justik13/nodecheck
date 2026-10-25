@@ -10,7 +10,7 @@
 
 ## Быстрый запуск
 
-Запуск одной командой без предварительной установки (время работы ~25–35 секунд):
+Запуск одной командой без предварительной установки (время работы ~30–35 секунд):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh)
@@ -21,12 +21,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh)
 ```
 
-Полный замер скорости iPerf3 по всем 7 регионам РФ:
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) --full-iperf
-```
-
-Без замера скорости через iPerf3 (только пинг):
+Без замера скорости через iPerf3 (только пинг, занимает ~10–15 секунд):
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) --no-iperf
 ```
@@ -37,14 +32,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 
 При настройке VPN-сервера для пользователей в РФ критически важно контролировать:
 
-1. **Реестр блокировок РКН:** проверка IP-адреса ноды на нахождение в едином реестре запрещенных сайтов (базы Antifilter). Если IP заблокирован РКН, нода не откроется у провайдеров РФ.
-2. **Обход блокировок РКН и ТСПУ (с защитой от Burst Window):** доступность Instagram, Discord (включая шлюз голосовых каналов), Twitter/X, ChatGPT, Claude, Rutracker, Signal, Notion. Все тесты считывают полезную нагрузку для исключения ложных пропусков на эвристической отсечке DPI в 16–20 КБ (10–14 пакетов).
-3. **YouTube без рекламы:** входит ли страна IP в список регионов без монетизации (Албания `AL`, Россия `RU`, Молдова `MD`, Монголия `MN`, Мьянма `MM`, Камбоджа `KH`).
-4. **Обратный геобондинг (Reverse Geoblocking):** открываются ли Госуслуги, ФНС, Мос.ру, РЖД, Авито, Wildberries и российские банки (Сбер, Т-Банк, ВТБ, Альфа-Банк). Скрипт формирует готовый список доменов для Split-Tunneling (bypass).
-5. **Готовность к режиму «Белых списков» (White List & Anycast CDN):** аудит доступности ключевых узлов белого списка (мессенджер MAX `max.ru`, Anycast Яндекс `yastatic.net`, VK Cloud, Госуслуги) и расчет RTT-порога для каскада VLESS XHTTP через Yandex Cloud CDN (предотвращение ошибок HTTP 504 Gateway Timeout).
-6. **Безопасность периметра и Anti-Active Probing:** аудит портов 80 и 443 на утечки доменных имен в HTTP-редиректах (`Location:`) и TLS-сертификатах (`CN/SAN`) цензурным роботам ТСПУ. Проверка соответствия SelfSteal SNI через `--sni`.
-7. **Отказоустойчивый iPerf3 (пул портов 5201–5209):** перебор портов и пулы fallback-серверов в каждом макрорегионе (на базе `itdoginfo/russian-iperf3-servers`), предотвращающие сбои «сервер занят».
-8. **Сетевой стек и Path MTU:** статус TCP BBR, открытость UDP, замер Path MTU с рекомендацией точного размера MTU под WireGuard / AmneziaWG (1360).
+1. **Характеристики ноды и CPU Steal:** определение гипервизора (KVM/LXC/Bare-Metal), модели процессора, vCPU, RAM, диска, аптайма и замер **CPU Steal %** (выборка 2.0 секунды + среднее за весь аптайм) для своевременного обнаружения шумных соседей по хосту и риска джиттера VPN.
+2. **Консенсус 18 баз GeoIP:** одновременный параллельный опрос 18 провайдеров геолокации для предотвращения утечек региона и некорректного определения страны.
+3. **Реестр блокировок РКН:** проверка IP-адреса ноды на нахождение в едином реестре запрещенных сайтов (базы Antifilter). Если IP заблокирован РКН, нода не откроется у провайдеров РФ.
+4. **Обход блокировок РКН и ТСПУ:** доступность Instagram, Discord (включая шлюз голосовых каналов), Twitter/X, ChatGPT, Claude, Rutracker, Signal, Notion. Все тесты считывают полезную нагрузку для исключения ложных пропусков на эвристической отсечке DPI в 16–20 КБ.
+5. **YouTube без рекламы:** входит ли страна IP в список регионов без монетизации (Албания `AL`, Россия `RU`, Молдова `MD`, Монголия `MN`, Мьянма `MM`, Камбоджа `KH`).
+6. **Обратный геобондинг (Reverse Geoblocking):** открываются ли Госуслуги, ФНС, Мос.ру, РЖД, Авито, Wildberries, Озон (с детекцией anti-VPN фильтра `403`) и российские банки (Сбер, Т-Банк, ВТБ, Альфа-Банк).
+7. **Готовность к режиму «Белых списков» (White List & Anycast CDN):** аудит доступности ключевых узлов белого списка (мессенджер MAX `max.ru`, Anycast Яндекс `yastatic.net`, VK Cloud, Госуслуги) и расчет RTT-порога для каскада VLESS XHTTP через Yandex Cloud CDN (предотвращение ошибок HTTP 504 Gateway Timeout).
+8. **Безопасность периметра и Anti-Active Probing:** аудит портов 80 и 443 на утечки доменных имен в HTTP-редиректах (`Location:`) и TLS-сертификатах (`CN/SAN`) цензурным роботам ТСПУ. Проверка соответствия SelfSteal SNI через `--sni`.
+9. **Связность и дуплексный iPerf3 по всей РФ:** замер задержки (RTT) и реальной пропускной способности (↓ DL / ↑ UL) до 7 макро-регионов РФ (Москва, Санкт-Петербург, Казань, Ростов-на-Дону, Екатеринбург, Новосибирск, Иркутск) с пулом портов 5201–5209.
+10. **Сетевой стек и реальный MTU:** статус TCP BBR, открытость UDP, считывание реального MTU сетевого интерфейса и Path MTU до шлюза без выдуманных ярлыков.
 
 ---
 
@@ -56,11 +53,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 ================================================================================
  IPv4:             168.222.254.191
  Локация / ASN:    DE (Frankfurt am Main) — AS198550 (NODE HOST LIMITED)
+ ОС и ядро:        Ubuntu 24.04.4 LTS (6.8.0-147-generic x86_64)
+ Платформа:        KVM | Аптайм: 4 days, 3 hours, 56 minutes
+ Процессор (CPU):  AMD Ryzen 9 5950X 16-Core Processor (1 vCPU)
+ CPU Steal:        0.0% (Clean, замер 2.0s) | 0.04% (за аптайм)
+ Память / Диск:    RAM: 571 MB / 961 MB (59.4%) | Диск: 5.6G / 9.8G (61%)
  Тип хоста:        Residential / ISP
  Реестр РКН:       Clean (Not in Registry)
  Антифрод / Риск:  Clean / Low Risk (0/100), Google Captcha: Clean (No Captcha)
  Сетевой стек:     BBR: Active | UDP: Open (DNS Bidirectional) | Port 25: Open
- Path MTU (PMTU):  1500 (Standard Ethernet) (Рек. для WG: 1420 (WG) / 1360 (AWG))
+ MTU сети:         1500 (Path MTU: 1476)
 ================================================================================
 
 1. 🌐 Консенсус GeoIP баз данных (18 источников)
@@ -111,10 +113,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
   Spotify Signup                        Yes
   Netflix                               Yes
   Steam Store (Игры)                    Yes
-  PlayStation Network                   Yes
+  PlayStation Network                   No (000)
   Reddit                                Yes
   Apple Services                        DE
-  Signal                                Yes
+  Signal                                No (Timeout / TSPU Block)
   Notion                                Yes
 
 3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)
@@ -123,57 +125,44 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
   Госуслуги (gosuslugi.ru)              OK
   ФНС (nalog.gov.ru)                    OK
   Мос.ру (mos.ru)                       OK
-  РЖД (ticket.rzd.ru)                   OK
+  РЖД (ticket.rzd.ru)                   Blocked (Timeout / Geo-Drop)
   Яндекс (ya.ru)                        OK
   ВКонтакте (vk.com)                    OK
-  СберБанк (sberbank.ru)                OK
+  СберБанк (sberbank.ru)                Blocked (Timeout / Geo-Drop)
   Т-Банк (tbank.ru)                     OK
-  ВТБ (vtb.ru)                          Blocked (403 Geoblock)
-  Альфа-Банк (alfabank.ru)              Blocked (403 Geoblock)
+  ВТБ (vtb.ru)                          Blocked (Timeout / Geo-Drop)
+  Альфа-Банк (alfabank.ru)              Blocked (Timeout / Geo-Drop)
   Авито (avito.ru)                      Blocked (439 Qrator Captcha)
   Wildberries (wildberries.ru)          Blocked (WAF 498)
+  Озон (ozon.ru)                        Blocked (Anti-VPN 403)
   Кинопоиск (kinopoisk.ru)              OK
 
-4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)
-  Регион (Узел связи)                   Задержка (RTT)  Скорость (↓ DL / ↑ UL)
-  ------------------------------------  --------------  -----------------------
-  Москва (Центр, Hostkey / MSK-IX)      27.6 ms         ↓ 295 / ↑ 273 Mbps
-  Санкт-Петербург (Северо-Запад, SPB)   16.0 ms         — (--full-iperf)
-  Казань (Поволжье, ER-Telecom)         35.9 ms         — (--full-iperf)
-  Ростов-на-Дону (Юг, ER-Telecom)       41.1 ms         — (--full-iperf)
-  Екатеринбург (Урал, ER-Telecom)       48.2 ms         ↓ 173 / ↑ 801 Mbps
-  Новосибирск (Сибирь, ER-Telecom)      72.9 ms         — (--full-iperf)
-  Иркутск (Восточная Сибирь, ER)        87.5 ms         — (--full-iperf)
+4. ⚪ Готовность к режиму «Белых списков» (White List & RU CDN Readiness)
+  Параметр / Узел                                 Статус
+  ------------------------------------            ------
+  Роль ноды в топологии                           Exit / Outbound (Зарубежный шлюз)
+  Мессенджер MAX (max.ru, Уровень 1)              OK (Доступен)
+  Anycast Яндекс / CDN (yastatic.net, Уровень 2)  OK (Доступен)
+  VK Cloud / ВКонтакте (vk.com, Уровень 2)        OK (Доступен)
+  Портал Госуслуг (gosuslugi.ru, Уровень 2)       OK (Доступен)
+  Задержка до Anycast РФ (RTT)                    45.8 ms — Отлично (<80 ms, минимальный джиттер)
+  Стек протоколов под Белые Списки                UDP мертв в WL ➔ VLESS XHTTP over TCP/TLS 443
 
-5. ⚪ Готовность к режиму «Белых списков» (White List & RU CDN Readiness)
-  Параметр / Узел                       Статус
-  ------------------------------------  ------
-  Роль ноды в топологии                 Exit / Outbound (Зарубежный шлюз)
-  Мессенджер MAX (max.ru, Уровень 1)    OK (Доступен)
-  Anycast Яндекс / CDN (yastatic.net)   OK (Доступен)
-  VK Cloud / ВКонтакте (vk.com)         OK (Доступен)
-  Портал Госуслуг (gosuslugi.ru)        OK (Доступен)
-  Задержка до Anycast РФ (RTT)          27.6 ms — Отлично (<80 ms, минимальный джиттер)
-  Стек протоколов под Белые Списки      UDP мертв в WL ➔ VLESS XHTTP over TCP/TLS 443
-
-6. 🛡 Безопасность периметра и Zero-Probing (Anti-Active Probing / SelfSteal)
+5. 🛡 Безопасность периметра и Zero-Probing (Anti-Active Probing / SelfSteal)
   Тест периметра                        Результат
   ------------------------------------  ------
   Защита от зондов ТСПУ (80/443)        Protected (Ports Closed / Silent Drop)
 
-================================================================================
- ⚖️  Вердикт пригодности ноды для РФ аудитории
-================================================================================
- • Оценка ноды: 8.5 / 10 (ХОРОШО ДЛЯ VPN)
-   - Зарубежные сервисы: Обход блокировок функционирует (19/20 сервисов доступно).
-   - Внимание: Зарубежный IP блокируется сервисами РФ: ВТБ, Альфа-Банк, Авито, Wildberries.
-   - Рекомендация Split-Tunneling (bypass): vtb.ru, alfabank.ru, avito.ru, wildberries.ru
-   - Белые списки (WL): Зарубежный Exit. Каскад VLESS XHTTP через CDN: Отлично (<80 ms, минимальный джиттер) (RTT 27.6 ms).
-   - Сетевой стек под VPN: Path MTU 1500 (Рекомендуемый для WG/AWG: 1420 (WG) / 1360 (AWG)).
-   - Примечание WL: В режиме Белых Списков UDP полностью блокируется ТСПУ — WireGuard/AWG не работают, используйте VLESS XHTTP over TCP/TLS 443.
-   - Связность: Москва 27.6 ms, СПб 16.0 ms, Поволжье 35.9 ms, Урал 48.2 ms, Сибирь 72.9 ms.
-   - Пропускная способность iPerf3 (Москва): ↓ 295 / ↑ 273 Mbps.
-================================================================================
+6. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)
+  Регион (Узел связи)                   Задержка (RTT)  Скорость (↓ DL / ↑ UL)
+  ------------------------------------  --------------  -----------------------
+  Москва (Центр, Hostkey / MSK-IX)      45.8 ms         ↓ 522 Mbps / ↑ 124 Mbps
+  Санкт-Петербург (Северо-Запад, SPB)   57.9 ms         ↓ 429 Mbps / ↑ 1087 Mbps
+  Казань (Поволжье, ER-Telecom)         60.1 ms         ↓ 335 Mbps / ↑ 1134 Mbps
+  Ростов-на-Дону (Юг, ER-Telecom)       64.8 ms         ↓ 309 Mbps / ↑ 1096 Mbps
+  Екатеринбург (Урал, ER-Telecom)       66.5 ms         ↓ 338 Mbps / ↑ 706 Mbps
+  Новосибирск (Сибирь, ER-Telecom)      94.0 ms         ↓ 156 Mbps / ↑ 1136 Mbps
+  Иркутск (Восточная Сибирь, ER)        116.1 ms        ↓ 94 Mbps / ↑ 262 Mbps
 ```
 
 ---
@@ -183,7 +172,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 | Опция | Описание |
 | :--- | :--- |
 | `-h`, `--help` | Справка по всем опциям |
-| `--full-iperf` | Полный замер скорости iPerf3 по всем 7 регионам РФ |
 | `--no-iperf` | Пропустить замер скорости iPerf3 (только пинг) |
 | `--sni DOMAIN` | Проверка совпадения домена и IP (SelfSteal против `NDPI_UNRESOLVED_HOSTNAME`) |
 | `--cdn URL` | Проверка кастомного эндпоинта VLESS XHTTP CDN (Bodiless GET / Header Uplink) |
@@ -193,6 +181,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 | `--no-doh` | Отключить DNS-over-HTTPS (системный резолвер) |
 | `--doh PROVIDER` | Провайдер DoH (`cloudflare`, `quad9`, `adguard`) |
 | `-v`, `--verbose` | Логирование сетевых запросов |
+| `-d`, `--debug` | Отладочный режим с сохранением подробного лога |
 
 ---
 
