@@ -1893,7 +1893,6 @@ Options:
   -d, --debug              Enable debug mode (saves trace to $DEBUG_LOG_FILE)
   -j, --json               Output results in pure JSON format
   --no-iperf               Skip iPerf3 speedtest (latency ping only)
-  --full-iperf             Run iPerf3 duplex speedtest on all 7 Russian regions
   --sni DOMAIN             Verify domain against node IP (protect against NDPI_UNRESOLVED_HOSTNAME)
   --cdn URL                Validate VLESS XHTTP CDN endpoint (Bodiless GET / Header Uplink check)
   -p, --proxy ADDR         Use SOCKS5/SOCKS5h proxy (format: host:port)
@@ -1903,10 +1902,9 @@ Options:
 
 Examples:
   ./nodecheck.sh                         # Run full audit (GeoIP, Unblock, RU Geoblock, All-RU Ping, iPerf3)
-  ./nodecheck.sh --full-iperf            # Test iPerf3 bandwidth on all 7 RU regions
+  ./nodecheck.sh --no-iperf              # Run audit without bandwidth speedtest
   ./nodecheck.sh --sni mydomain.com      # Validate domain against IP for SelfSteal SNI
   ./nodecheck.sh --cdn https://cdn.x.com # Test VLESS XHTTP CDN endpoint
-  ./nodecheck.sh --no-iperf              # Run audit without bandwidth speedtest
   ./nodecheck.sh -p 127.0.0.1:1080       # Audit VPN/Proxy node via SOCKS5
   ./nodecheck.sh -j                      # Output pure JSON for monitoring / bots
 
