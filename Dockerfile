@@ -16,7 +16,8 @@ RUN apk add --no-cache \
     sed \
     gawk \
     iperf3 \
-    iputils
+    iputils \
+    openssl
 
 WORKDIR /app
 COPY nodecheck.sh /app/nodecheck.sh
