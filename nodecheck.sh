@@ -57,6 +57,17 @@ NODE_ZERO_PROBE_COLOR="NULL"
 NODE_SNI_STATUS=""
 NODE_SNI_COLOR="NULL"
 
+NODE_CPU_MODEL=""
+NODE_CPU_CORES=1
+NODE_VIRT=""
+NODE_UPTIME=""
+NODE_OS=""
+NODE_RAM=""
+NODE_DISK=""
+NODE_CPU_STEAL="0.0%"
+NODE_CPU_STEAL_NUM="0.0"
+NODE_CPU_STEAL_COLOR="1;32"
+
 WL_NODE_ROLE=""
 WL_ANYCAST_RTT="N/A"
 WL_CASCADE_STATUS=""
@@ -580,6 +591,75 @@ get_vpn_node_info() {
       NODE_SNI_STATUS="Cannot resolve domain $CHECK_SNI"
       NODE_SNI_COLOR="0;90"
     fi
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# 0. System Hardware & Virtualization Specs (CPU Steal, RAM, Disk, Uptime)
+# ------------------------------------------------------------------------------
+
+get_system_specs() {
+  # 1. CPU Model & Cores
+  NODE_CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//' || echo "Unknown CPU")
+  NODE_CPU_CORES=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "1")
+  if [[ -z "$NODE_CPU_MODEL" ]]; then NODE_CPU_MODEL="Generic CPU"; fi
+
+  # 2. Virtualization & Uptime
+  NODE_VIRT=$(systemd-detect-virt 2>/dev/null || echo "KVM")
+  if [[ "$NODE_VIRT" == "none" ]]; then NODE_VIRT="Bare-Metal"; fi
+  NODE_UPTIME=$(uptime -p 2>/dev/null | sed 's/^up //' || uptime 2>/dev/null | awk -F'( |,|:)+' '{print $6"h "$7"m"}' || echo "N/A")
+
+  # 3. OS & Kernel
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release 2>/dev/null
+    NODE_OS="${PRETTY_NAME:-Linux} ($(uname -r) $(uname -m))"
+  else
+    NODE_OS="Linux ($(uname -r) $(uname -m))"
+  fi
+
+  # 4. RAM & Disk
+  if is_command_available "free"; then
+    NODE_RAM=$(free -m 2>/dev/null | awk '/Mem:/ {printf "%d MB / %d MB (%.1f%%)", $3, $2, ($3/$2)*100}')
+  else
+    NODE_RAM="N/A"
+  fi
+  if is_command_available "df"; then
+    NODE_DISK=$(df -h / 2>/dev/null | awk 'NR==2 {printf "%s / %s (%s)", $3, $2, $5}')
+  else
+    NODE_DISK="N/A"
+  fi
+
+  # 5. CPU Steal measurement (0.5s delta)
+  local u1 n1 s1 i1 w1 x1 q1 st1 u2 n2 s2 i2 w2 x2 q2 st2
+  if [[ -r /proc/stat ]]; then
+    read -r _ u1 n1 s1 i1 w1 x1 q1 st1 _ < /proc/stat
+    sleep 0.5
+    read -r _ u2 n2 s2 i2 w2 x2 q2 st2 _ < /proc/stat
+    local total1=$((u1 + n1 + s1 + i1 + w1 + x1 + q1 + st1))
+    local total2=$((u2 + n2 + s2 + i2 + w2 + x2 + q2 + st2))
+    local diff_total=$((total2 - total1))
+    local diff_steal=$((st2 - st1))
+    if (( diff_total > 0 )); then
+      NODE_CPU_STEAL_NUM=$(awk -v s="$diff_steal" -v t="$diff_total" 'BEGIN { printf "%.1f", (s/t)*100 }')
+    else
+      NODE_CPU_STEAL_NUM="0.0"
+    fi
+  else
+    NODE_CPU_STEAL_NUM="0.0"
+  fi
+
+  local steal_int
+  steal_int=$(grep -oE '^[0-9]+' <<<"$NODE_CPU_STEAL_NUM" || echo "0")
+  if (( steal_int > 10 )); then
+    NODE_CPU_STEAL_COLOR="1;31"
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (High Steal / Оверселл!)"
+  elif (( steal_int > 3 )); then
+    NODE_CPU_STEAL_COLOR="1;33"
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Moderate)"
+  else
+    NODE_CPU_STEAL_COLOR="1;32"
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Clean)"
   fi
 }
 
@@ -1333,7 +1413,7 @@ iperf_speed_test() {
   echo "—"
 }
 
-measure_ru_connectivity() {
+measure_ru_pings() {
   local p_dir="$TMP_WORK_DIR/pings"
   mkdir -p "$p_dir"
 
@@ -1354,7 +1434,9 @@ measure_ru_connectivity() {
   RU_PING_EKAT=$(<"$p_dir/ekat")
   RU_PING_NSK=$(<"$p_dir/nsk")
   RU_PING_IRK=$(<"$p_dir/irk")
+}
 
+measure_ru_iperf() {
   test_region_speed() {
     local label="$1" ping_val="$2" host="$3" fallback_host="$4" test_iperf_default="$5"
     local speed="—"
@@ -1385,7 +1467,7 @@ measure_ru_connectivity() {
   test_region_speed "Санкт-Петербург (Северо-Запад, SPB)" "$RU_PING_SPB" "st.spb.ertelecom.ru" "st.yar.ertelecom.ru" false
   test_region_speed "Казань (Поволжье, ER-Telecom)" "$RU_PING_KZN" "st.kzn.ertelecom.ru" "st.chelny.ertelecom.ru" false
   test_region_speed "Ростов-на-Дону (Юг, ER-Telecom)" "$RU_PING_ROSTOV" "st.rostov.ertelecom.ru" "st.volgograd.ertelecom.ru" false
-  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" "st.chel.ertelecom.ru" true
+  test_region_speed "Екатеринбург (Урал, ER-Telecom)" "$RU_PING_EKAT" "st.ekat.ertelecom.ru" "st.chel.ertelecom.ru" false
   test_region_speed "Новосибирск (Сибирь, ER-Telecom)" "$RU_PING_NSK" "st.nsk.ertelecom.ru" "st.tomsk.ertelecom.ru" false
   test_region_speed "Иркутск (Восточная Сибирь, ER)" "$RU_PING_IRK" "st.irkutsk.ertelecom.ru" "st.krsk.ertelecom.ru" false
 
@@ -1538,6 +1620,11 @@ print_header() {
       echo -e " IPv6:\t$(bold "$EXTERNAL_IPV6")"
     fi
     echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
+    echo -e " ОС и ядро:\t$(bold "$NODE_OS")"
+    echo -e " Платформа:\t$(bold "${NODE_VIRT^^}") | Аптайм: $(bold "$NODE_UPTIME")"
+    echo -e " Процессор (CPU):\t$(bold "$NODE_CPU_MODEL") (${NODE_CPU_CORES} vCPU)"
+    echo -e " CPU Steal:\t$(color "$NODE_CPU_STEAL_COLOR" "$NODE_CPU_STEAL")"
+    echo -e " Память / Диск:\tRAM: $(bold "$NODE_RAM") | Диск: $(bold "$NODE_DISK")"
     echo -e " Тип хоста:\t$(bold "$NODE_TYPE")"
     echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
@@ -1850,6 +1937,14 @@ calculate_verdict() {
     fi
   fi
 
+  # CPU Steal check (noisy neighbors / host oversell causes VPN handshake drops & jitter)
+  local steal_int
+  steal_int=$(grep -oE '^[0-9]+' <<<"${NODE_CPU_STEAL_NUM:-0}" || echo "0")
+  if (( steal_int > 10 )); then
+    score=$(( score - 5 ))
+    VERDICT_DEDUCTIONS+=("Высокий CPU Steal ($NODE_CPU_STEAL: оверселл хоста, риск джиттера VPN: -0.5)")
+  fi
+
   # Bonus: YouTube Ad-Free
   if [[ "$YOUTUBE_AD_FREE" == "true" ]]; then
     score=$(( score + 2 ))
@@ -1992,6 +2087,14 @@ build_json() {
 
   RESULT_JSON=$(jq -n \
     --arg ip "${EXTERNAL_IPV4:-}" \
+    --arg os "${NODE_OS:-}" \
+    --arg virt "${NODE_VIRT:-}" \
+    --arg uptime "${NODE_UPTIME:-}" \
+    --arg cpu_model "${NODE_CPU_MODEL:-}" \
+    --arg cpu_cores "${NODE_CPU_CORES:-1}" \
+    --arg cpu_steal "${NODE_CPU_STEAL_NUM:-0.0}" \
+    --arg ram "${NODE_RAM:-}" \
+    --arg disk "${NODE_DISK:-}" \
     --arg country "${NODE_COUNTRY_CODE:-}" \
     --arg city "${NODE_CITY:-}" \
     --arg asn "${NODE_ASN:-}" \
@@ -2021,6 +2124,16 @@ build_json() {
     --argjson whitelist "$whitelist_json" \
     '{
       ip: $ip,
+      system: {
+        os: $os,
+        virt: $virt,
+        uptime: $uptime,
+        cpu_model: $cpu_model,
+        cpu_cores: ($cpu_cores | tonumber),
+        cpu_steal_pct: ($cpu_steal | tonumber),
+        ram: $ram,
+        disk: $disk
+      },
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
       network: { bbr: $bbr, udp: $udp, port25: $port25, pmtu: $pmtu, recommended_mtu: $rec_mtu },
@@ -2168,6 +2281,7 @@ main() {
   fi
 
   get_vpn_node_info
+  get_system_specs
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_header
@@ -2188,7 +2302,8 @@ main() {
     print_ru_local_table
   fi
 
-  # 4. White List & Perimeter Security
+  # 4. Multi-Region Pings & White List Readiness
+  measure_ru_pings
   measure_whitelist_readiness
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
@@ -2200,7 +2315,7 @@ main() {
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     printf "\033[1;97m6. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
   fi
-  measure_ru_connectivity
+  measure_ru_iperf
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_connectivity_table
