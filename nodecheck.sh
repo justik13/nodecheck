@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.3.0
+# NodeCheck (RU Edition) v3.5.1
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -10,8 +10,10 @@
 # ==============================================================================
 
 set -o pipefail
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.4.1-ru"
+SCRIPT_VERSION="3.5.1-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -26,9 +28,11 @@ PROXY_ADDR=""
 INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
 RUN_IPERF=true
+RUN_IPERF_ALL=false
 RUN_FULL_IPERF=false
-IPERF_TIME_DL=5
-IPERF_TIME_UL=3
+IPERF_TIME=5
+IPERF_TIME_DL="$IPERF_TIME"
+IPERF_TIME_UL="$IPERF_TIME"
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -79,8 +83,9 @@ GEMINI_REGIONS_URL="https://ai.google.dev/gemini-api/docs/available-regions.md.t
 
 USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
-DEBUG_LOG_FILE="/tmp/nodecheck_debug.log"
+DEBUG_LOG_FILE=""
 TMP_WORK_DIR=""
+CPU_STAT_START=""
 
 NO_COLOR_MODE=false
 
@@ -118,21 +123,59 @@ ARR_RU_UNBLOCK=()
 ARR_RU_LOCAL=()
 ARR_CONNECTIVITY=()
 
-# ISO 3166-1 alpha-2 dictionary
+# ISO 3166-1 alpha-2 dictionary (249 countries/territories)
 declare -A COUNTRY_NAMES=(
-  [AF]="Afghanistan" [AL]="Albania" [DZ]="Algeria" [AD]="Andorra" [AO]="Angola"
-  [AR]="Argentina" [AM]="Armenia" [AU]="Australia" [AT]="Austria" [AZ]="Azerbaijan"
-  [BY]="Belarus" [BE]="Belgium" [BR]="Brazil" [BG]="Bulgaria" [CA]="Canada"
-  [CN]="China" [CY]="Cyprus" [CZ]="Czechia" [DK]="Denmark" [EE]="Estonia"
-  [FI]="Finland" [FR]="France" [GE]="Georgia" [DE]="Germany" [GR]="Greece"
+  [AF]="Afghanistan" [AX]="Åland Islands" [AL]="Albania" [DZ]="Algeria" [AS]="American Samoa"
+  [AD]="Andorra" [AO]="Angola" [AI]="Anguilla" [AQ]="Antarctica" [AG]="Antigua and Barbuda"
+  [AR]="Argentina" [AM]="Armenia" [AW]="Aruba" [AU]="Australia" [AT]="Austria"
+  [AZ]="Azerbaijan" [BS]="Bahamas" [BH]="Bahrain" [BD]="Bangladesh" [BB]="Barbados"
+  [BY]="Belarus" [BE]="Belgium" [BZ]="Belize" [BJ]="Benin" [BM]="Bermuda"
+  [BT]="Bhutan" [BO]="Bolivia" [BQ]="Bonaire, Sint Eustatius and Saba" [BA]="Bosnia and Herzegovina" [BW]="Botswana"
+  [BV]="Bouvet Island" [BR]="Brazil" [IO]="British Indian Ocean Territory" [BN]="Brunei Darussalam" [BG]="Bulgaria"
+  [BF]="Burkina Faso" [BI]="Burundi" [CV]="Cabo Verde" [KH]="Cambodia" [CM]="Cameroon"
+  [CA]="Canada" [KY]="Cayman Islands" [CF]="Central African Republic" [TD]="Chad" [CL]="Chile"
+  [CN]="China" [CX]="Christmas Island" [CC]="Cocos (Keeling) Islands" [CO]="Colombia" [KM]="Comoros"
+  [CG]="Congo" [CD]="Congo (Democratic Republic of the)" [CK]="Cook Islands" [CR]="Costa Rica" [CI]="Côte d'Ivoire"
+  [HR]="Croatia" [CU]="Cuba" [CW]="Curaçao" [CY]="Cyprus" [CZ]="Czech Republic"
+  [DK]="Denmark" [DJ]="Djibouti" [DM]="Dominica" [DO]="Dominican Republic" [EC]="Ecuador"
+  [EG]="Egypt" [SV]="El Salvador" [GQ]="Equatorial Guinea" [ER]="Eritrea" [EE]="Estonia"
+  [SZ]="Eswatini" [ET]="Ethiopia" [FK]="Falkland Islands (Malvinas)" [FO]="Faroe Islands" [FJ]="Fiji"
+  [FI]="Finland" [FR]="France" [GF]="French Guiana" [PF]="French Polynesia" [TF]="French Southern Territories"
+  [GA]="Gabon" [GM]="Gambia" [GE]="Georgia" [DE]="Germany" [GH]="Ghana"
+  [GI]="Gibraltar" [GR]="Greece" [GL]="Greenland" [GD]="Grenada" [GP]="Guadeloupe"
+  [GU]="Guam" [GT]="Guatemala" [GG]="Guernsey" [GN]="Guinea" [GW]="Guinea-Bissau"
+  [GY]="Guyana" [HT]="Haiti" [HM]="Heard Island and McDonald Islands" [VA]="Holy See" [HN]="Honduras"
   [HK]="Hong Kong" [HU]="Hungary" [IS]="Iceland" [IN]="India" [ID]="Indonesia"
-  [IE]="Ireland" [IL]="Israel" [IT]="Italy" [JP]="Japan" [KZ]="Kazakhstan"
-  [LV]="Latvia" [LT]="Lithuania" [LU]="Luxembourg" [MD]="Moldova" [NL]="Netherlands"
-  [NZ]="New Zealand" [NO]="Norway" [PL]="Poland" [PT]="Portugal" [RO]="Romania"
-  [RU]="Russia" [RS]="Serbia" [SG]="Singapore" [SK]="Slovakia" [SI]="Slovenia"
-  [ES]="Spain" [SE]="Sweden" [CH]="Switzerland" [TR]="Turkey" [UA]="Ukraine"
-  [AE]="UAE" [GB]="United Kingdom" [US]="United States" [UZ]="Uzbekistan"
-  [KH]="Cambodia" [MN]="Mongolia" [MM]="Myanmar"
+  [IR]="Iran" [IQ]="Iraq" [IE]="Ireland" [IM]="Isle of Man" [IL]="Israel"
+  [IT]="Italy" [JM]="Jamaica" [JP]="Japan" [JE]="Jersey" [JO]="Jordan"
+  [KZ]="Kazakhstan" [KE]="Kenya" [KI]="Kiribati" [KP]="Korea (Democratic People's Republic of)" [KR]="Korea (Republic of)"
+  [KW]="Kuwait" [KG]="Kyrgyzstan" [LA]="Lao People's Democratic Republic" [LV]="Latvia" [LB]="Lebanon"
+  [LS]="Lesotho" [LR]="Liberia" [LY]="Libya" [LI]="Liechtenstein" [LT]="Lithuania"
+  [LU]="Luxembourg" [MO]="Macao" [MG]="Madagascar" [MW]="Malawi" [MY]="Malaysia"
+  [MV]="Maldives" [ML]="Mali" [MT]="Malta" [MH]="Marshall Islands" [MQ]="Martinique"
+  [MR]="Mauritania" [MU]="Mauritius" [YT]="Mayotte" [MX]="Mexico" [FM]="Micronesia (Federated States of)"
+  [MD]="Moldova" [MC]="Monaco" [MN]="Mongolia" [ME]="Montenegro" [MS]="Montserrat"
+  [MA]="Morocco" [MZ]="Mozambique" [MM]="Myanmar" [NA]="Namibia" [NR]="Nauru"
+  [NP]="Nepal" [NL]="Netherlands" [NC]="New Caledonia" [NZ]="New Zealand" [NI]="Nicaragua"
+  [NE]="Niger" [NG]="Nigeria" [NU]="Niue" [NF]="Norfolk Island" [MK]="North Macedonia"
+  [MP]="Northern Mariana Islands" [NO]="Norway" [OM]="Oman" [PK]="Pakistan" [PW]="Palau"
+  [PS]="Palestine" [PA]="Panama" [PG]="Papua New Guinea" [PY]="Paraguay" [PE]="Peru"
+  [PH]="Philippines" [PN]="Pitcairn" [PL]="Poland" [PT]="Portugal" [PR]="Puerto Rico"
+  [QA]="Qatar" [RE]="Réunion" [RO]="Romania" [RU]="Russia" [RW]="Rwanda"
+  [BL]="Saint Barthélemy" [SH]="Saint Helena" [KN]="Saint Kitts and Nevis" [LC]="Saint Lucia" [MF]="Saint Martin (French part)"
+  [PM]="Saint Pierre and Miquelon" [VC]="Saint Vincent and the Grenadines" [WS]="Samoa" [SM]="San Marino" [ST]="Sao Tome and Principe"
+  [SA]="Saudi Arabia" [SN]="Senegal" [RS]="Serbia" [SC]="Seychelles" [SL]="Sierra Leone"
+  [SG]="Singapore" [SX]="Sint Maarten (Dutch part)" [SK]="Slovakia" [SI]="Slovenia" [SB]="Solomon Islands"
+  [SO]="Somalia" [ZA]="South Africa" [GS]="South Georgia and the South Sandwich Islands" [SS]="South Sudan" [ES]="Spain"
+  [LK]="Sri Lanka" [SD]="Sudan" [SR]="Suriname" [SJ]="Svalbard and Jan Mayen" [SE]="Sweden"
+  [CH]="Switzerland" [SY]="Syrian Arab Republic" [TW]="Taiwan" [TJ]="Tajikistan" [TZ]="Tanzania"
+  [TH]="Thailand" [TL]="Timor-Leste" [TG]="Togo" [TK]="Tokelau" [TO]="Tonga"
+  [TT]="Trinidad and Tobago" [TN]="Tunisia" [TR]="Turkey" [TM]="Turkmenistan" [TC]="Turks and Caicos Islands"
+  [TV]="Tuvalu" [UG]="Uganda" [UA]="Ukraine" [AE]="United Arab Emirates" [GB]="United Kingdom"
+  [US]="United States" [UM]="United States Minor Outlying Islands" [UY]="Uruguay" [UZ]="Uzbekistan" [VU]="Vanuatu"
+  [VE]="Venezuela" [VN]="Vietnam" [VG]="Virgin Islands (British)" [VI]="Virgin Islands (U.S.)" [WF]="Wallis and Futuna"
+  [EH]="Western Sahara" [YE]="Yemen" [ZM]="Zambia" [ZW]="Zimbabwe" [XK]="Kosovo"
+  [EU]="European Union" [WW]="Worldwide"
 )
 
 color() {
@@ -163,14 +206,28 @@ progress_status() {
 
 progress_clear() {
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-    printf "\r\033[2K\r"
+    if [[ "$NO_COLOR_MODE" == "true" || -n "${NO_COLOR:-}" ]]; then
+      printf "\r%80s\r" ""
+    else
+      printf "\r\033[2K\r"
+    fi
+  fi
+}
+
+read_val() {
+  local file="$1"
+  local def="${2:-N/A}"
+  if [[ -s "$file" ]]; then
+    cat "$file"
+  else
+    echo "$def"
   fi
 }
 
 pad_str() {
   local s="$1" w="$2"
-  local clean
-  clean=$(sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g' <<<"$s")
+  shopt -s extglob
+  local clean="${s//$'\033'\[*([0-9;])[a-zA-Z]/}"
   local len=${#clean}
   local diff=$(( w - len ))
   if (( diff > 0 )); then
@@ -186,8 +243,8 @@ format_value() {
     "—")
       color "$COLOR_NULL" "—"
       ;;
-    ""|"null"|"$STATUS_NA")
-      color "$COLOR_NULL" "$STATUS_NA"
+    ""|"null"|"$STATUS_NA"|*"N/A"*)
+      color "$COLOR_NULL" "$val"
       ;;
     "Yes"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*)
       color "$COLOR_SUCCESS" "$val"
@@ -202,8 +259,10 @@ format_value() {
       color "$COLOR_WARN" "$val"
       ;;
     *"ms")
-      local num_ms
-      num_ms=$(grep -oE '^[0-9]+' <<<"$val" || echo "999")
+      local num_ms="${val%%.*}"
+      num_ms="${num_ms%%ms*}"
+      num_ms="${num_ms//[^0-9]/}"
+      num_ms="${num_ms:-999}"
       if (( num_ms < 60 )); then
         color "$COLOR_SUCCESS" "$val"
       elif (( num_ms < 100 )); then
@@ -229,11 +288,15 @@ log() {
   local level="$1"
   shift
   local msg="$*"
-  if [[ "$DEBUG" == "true" ]]; then
+  if [[ "$DEBUG" == "true" && -n "$DEBUG_LOG_FILE" ]]; then
     printf "[%s] %s\n" "$level" "$msg" >> "$DEBUG_LOG_FILE"
   fi
   if [[ "$VERBOSE" == "true" ]]; then
-    printf "\033[%sm[%s]\033[0m %s\n" "$COLOR_INFO" "$level" "$msg" >&2
+    if [[ -n "$COLOR_INFO" ]]; then
+      printf "\033[%sm[%s]\033[0m %s\n" "$COLOR_INFO" "$level" "$msg" >&2
+    else
+      printf "[%s] %s\n" "$level" "$msg" >&2
+    fi
   fi
 }
 
@@ -243,12 +306,26 @@ error_exit() {
   else
     printf "Ошибка: %s\n" "$1" >&2
   fi
+  if [[ "$DEBUG" == "true" && -n "$DEBUG_LOG_FILE" && -f "$DEBUG_LOG_FILE" ]]; then
+    printf "\n--- [DEBUG TRACE LOG] ---\n" >&2
+    cat "$DEBUG_LOG_FILE" >&2
+    printf "--- [END DEBUG LOG] ---\n\n" >&2
+  fi
   cleanup
   exit 1
 }
 
 cleanup() {
+  trap - EXIT INT TERM
   progress_clear
+  local pids
+  pids=$(jobs -p 2>/dev/null)
+  if [[ -n "$pids" ]]; then
+    kill -TERM $pids 2>/dev/null || true
+    sleep 0.05 2>/dev/null || true
+    kill -KILL $pids 2>/dev/null || true
+    wait $pids 2>/dev/null || true
+  fi
   if [[ -n "$TMP_WORK_DIR" && -d "$TMP_WORK_DIR" ]]; then
     rm -rf "$TMP_WORK_DIR"
   fi
@@ -257,53 +334,78 @@ cleanup() {
 is_command_available() { command -v "$1" >/dev/null 2>&1; }
 
 install_dependencies() {
-  local required_cmds=()
-  for cmd in curl jq ping awk openssl; do
-    if ! is_command_available "$cmd"; then
-      if [[ "$cmd" == "ping" ]]; then
-        if is_command_available "apk"; then
-          required_cmds+=("iputils")
-        else
-          required_cmds+=("iputils-ping")
-        fi
-      else
-        required_cmds+=("$cmd")
-      fi
-    fi
-  done
+  local required_pkgs=()
 
-  if ! is_command_available "column"; then
-    if is_command_available "apk"; then
-      required_cmds+=("util-linux-misc")
-    else
-      required_cmds+=("bsdextrautils")
-    fi
+  if ! is_command_available "curl"; then
+    required_pkgs+=("curl")
   fi
-
+  if ! is_command_available "jq"; then
+    required_pkgs+=("jq")
+  fi
+  if ! is_command_available "awk"; then
+    required_pkgs+=("gawk")
+  fi
+  if ! is_command_available "ping"; then
+    required_pkgs+=("iputils-ping")
+  fi
+  if ! is_command_available "dig"; then
+    required_pkgs+=("bind9-dnsutils")
+  fi
   if [[ "$RUN_IPERF" == "true" ]] && ! is_command_available "iperf3"; then
-    required_cmds+=("iperf3")
+    required_pkgs+=("iperf3")
   fi
 
-  if [[ ${#required_cmds[@]} -eq 0 ]]; then
+  if [[ ${#required_pkgs[@]} -eq 0 ]]; then
     return 0
   fi
 
-  progress_status "Установка недостающих пакетов (${required_cmds[*]})"
-  log "INFO" "Installing missing packages: ${required_cmds[*]}"
-  if is_command_available "apt-get"; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq "${required_cmds[@]}" >/dev/null 2>&1 || true
-  elif is_command_available "apk"; then
-    apk add --no-cache "${required_cmds[@]}" >/dev/null 2>&1 || true
-  elif is_command_available "yum"; then
-    yum install -y -q "${required_cmds[@]}" >/dev/null 2>&1 || true
+  local sudo_prefix=""
+  local is_root=false
+  if [[ ${EUID:-$(id -u 2>/dev/null || echo 1)} -eq 0 ]]; then
+    is_root=true
+  elif is_command_available "sudo"; then
+    sudo_prefix="sudo "
   fi
-  progress_clear
 
-  for critical in curl jq; do
+  local install_cmd="${sudo_prefix}apt-get update && ${sudo_prefix}apt-get install -y --no-install-recommends ${required_pkgs[*]}"
+  local should_install=false
+
+  if [[ "$is_root" == "true" && ! -t 0 ]]; then
+    # Automatic installation in non-interactive pipeline under root (e.g. curl ... | bash)
+    should_install=true
+  elif [[ -t 0 && -t 1 ]]; then
+    printf "\n"
+    if [[ -n "$COLOR_WARN" ]]; then
+      printf "\033[%sm[!] Не найдены компоненты:\033[0m %s\n" "$COLOR_WARN" "${required_pkgs[*]}"
+    else
+      printf "[!] Не найдены компоненты: %s\n" "${required_pkgs[*]}"
+    fi
+    printf "Установить недостающие пакеты автоматически? [y/N]: "
+    local user_confirmed="n"
+    read -r -t 15 user_confirmed || user_confirmed="n"
+    printf "\n"
+    if [[ "$user_confirmed" =~ ^[Yy]$ ]]; then
+      should_install=true
+    fi
+  fi
+
+  if [[ "$should_install" == "true" ]]; then
+    progress_status "Установка недостающих пакетов (${required_pkgs[*]})"
+    log "INFO" "Installing missing packages: ${required_pkgs[*]}"
+    export DEBIAN_FRONTEND=noninteractive
+    ${sudo_prefix}apt-get update -qq >/dev/null 2>&1 || true
+    ${sudo_prefix}apt-get install -y -qq --no-install-recommends "${required_pkgs[@]}" >/dev/null 2>&1 || true
+    progress_clear
+  else
+    log "WARNING" "Missing packages: ${required_pkgs[*]}. Run: $install_cmd"
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "Примечание: отсутствуют утилиты (%s). Установите: %s\n\n" "${required_pkgs[*]}" "$install_cmd" >&2
+    fi
+  fi
+
+  for critical in curl jq awk; do
     if ! is_command_available "$critical"; then
-      error_exit "Необходимая утилита '$critical' не найдена. Установите: sudo apt install -y $critical"
+      error_exit "Критическая утилита '$critical' не найдена. Установите: $install_cmd"
     fi
   done
 }
@@ -326,8 +428,25 @@ check_doh() {
     cloudflare|*) SELECTED_DOH_URL="https://cloudflare-dns.com/dns-query" ;;
   esac
 
-  # Verify DoH connectivity
-  if ! curl -s -m 2 --doh-url "$SELECTED_DOH_URL" -o /dev/null "https://1.1.1.1" 2>/dev/null; then
+  # Verify DoH connectivity by resolving domain name
+  local doh_cmd=(curl -s -m 3)
+  if [[ "$IPV4_ONLY" == "true" ]]; then
+    doh_cmd+=(-4)
+  elif [[ "$IPV6_ONLY" == "true" ]]; then
+    doh_cmd+=(-6)
+  fi
+
+  if [[ -n "$PROXY_ADDR" ]]; then
+    doh_cmd+=(--proxy "socks5h://$PROXY_ADDR")
+  fi
+
+  if [[ -n "$INTERFACE_NAME" ]]; then
+    doh_cmd+=(--interface "$INTERFACE_NAME")
+  fi
+
+  doh_cmd+=(--doh-url "$SELECTED_DOH_URL" -o /dev/null "https://cloudflare.com")
+
+  if ! "${doh_cmd[@]}" 2>/dev/null; then
     log "WARNING" "DoH provider ($SELECTED_DOH_URL) unreachable; using standard resolver"
     USE_DOH=false
     SELECTED_DOH_URL=""
@@ -360,7 +479,15 @@ curl_wrapper() {
     esac
   done
 
-  local curl_cmd=(curl -sS -L --connect-timeout 2 --max-time "$timeout" --retry "$CURL_RETRIES" --retry-delay 0)
+  if [[ -z "$ip_version" ]]; then
+    if [[ "$IPV4_ONLY" == "true" ]]; then
+      ip_version="4"
+    elif [[ "$IPV6_ONLY" == "true" ]]; then
+      ip_version="6"
+    fi
+  fi
+
+  local curl_cmd=(curl -sS -L -b "" --connect-timeout 2 --max-time "$timeout" --retry "$CURL_RETRIES" --retry-delay 0)
   curl_cmd+=(-A "$USER_AGENT")
 
   if [[ "$ip_version" == "4" ]]; then
@@ -433,8 +560,20 @@ discover_external_ips() {
 }
 
 get_vpn_node_info() {
+  local primary_ip="${EXTERNAL_IPV4:-$EXTERNAL_IPV6}"
+  local ip_ver_arg=()
+  if [[ -n "$EXTERNAL_IPV4" && "$IPV6_ONLY" != "true" ]]; then
+    ip_ver_arg=(--ip-version "4")
+  elif [[ -n "$EXTERNAL_IPV6" ]]; then
+    ip_ver_arg=(--ip-version "6")
+  fi
+
   local info_raw
-  info_raw=$(curl_wrapper GET "https://ipinfo.io/json" --ip-version "4" --timeout 4 2>/dev/null)
+  if [[ -n "$primary_ip" ]]; then
+    info_raw=$(curl_wrapper GET "https://ipinfo.io/${primary_ip}/json" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+  else
+    info_raw=$(curl_wrapper GET "https://ipinfo.io/json" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+  fi
 
   if [[ -n "$info_raw" ]] && jq -e . >/dev/null 2>&1 <<<"$info_raw"; then
     NODE_ASN=$(jq -r '.org // ""' <<<"$info_raw" | grep -oE "AS[0-9]+" || echo "AS0")
@@ -443,9 +582,52 @@ get_vpn_node_info() {
     NODE_COUNTRY_CODE=$(jq -r '.country // ""' <<<"$info_raw")
   fi
 
+  # Fallback 1: ip-api.com if ipinfo failed, rate limited (429), or empty
+  if [[ -z "$NODE_ASN" || "$NODE_ASN" == "AS0" || -z "$NODE_COUNTRY_CODE" || -z "$NODE_CITY" || "$NODE_CITY" == "Unknown City" ]]; then
+    local fallback_raw
+    if [[ -n "$primary_ip" ]]; then
+      fallback_raw=$(curl_wrapper GET "http://ip-api.com/json/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+    else
+      fallback_raw=$(curl_wrapper GET "http://ip-api.com/json/" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+    fi
+    if [[ -n "$fallback_raw" ]] && jq -e '.status == "success"' >/dev/null 2>&1 <<<"$fallback_raw"; then
+      [[ -z "$NODE_ASN" || "$NODE_ASN" == "AS0" ]] && NODE_ASN=$(jq -r '.as // ""' <<<"$fallback_raw" | grep -oE "AS[0-9]+" || echo "AS0")
+      [[ -z "$NODE_ORG" || "$NODE_ORG" == "Unknown Org" ]] && NODE_ORG=$(jq -r '.org // .as // ""' <<<"$fallback_raw" | sed -E 's/^AS[0-9]+ //')
+      [[ -z "$NODE_CITY" || "$NODE_CITY" == "Unknown City" ]] && NODE_CITY=$(jq -r '.city // ""' <<<"$fallback_raw")
+      [[ -z "$NODE_COUNTRY_CODE" || "$NODE_COUNTRY_CODE" == "XX" ]] && NODE_COUNTRY_CODE=$(jq -r '.countryCode // ""' <<<"$fallback_raw")
+    fi
+  fi
+
+  # Fallback 2: ip.guide
+  if [[ -z "$NODE_ASN" || "$NODE_ASN" == "AS0" || -z "$NODE_COUNTRY_CODE" || -z "$NODE_CITY" || "$NODE_CITY" == "Unknown City" ]]; then
+    local guide_raw
+    if [[ -n "$primary_ip" ]]; then
+      guide_raw=$(curl_wrapper GET "https://ip.guide/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+    else
+      guide_raw=$(curl_wrapper GET "https://ip.guide/" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+    fi
+    if [[ -n "$guide_raw" ]] && jq -e . >/dev/null 2>&1 <<<"$guide_raw"; then
+      local guide_asn
+      guide_asn=$(jq -r '.network.autonomous_system.asn // empty' <<<"$guide_raw")
+      [[ -n "$guide_asn" && ( -z "$NODE_ASN" || "$NODE_ASN" == "AS0" ) ]] && NODE_ASN="AS${guide_asn}"
+      local guide_org
+      guide_org=$(jq -r '.network.autonomous_system.organization // empty' <<<"$guide_raw")
+      [[ -n "$guide_org" && ( -z "$NODE_ORG" || "$NODE_ORG" == "Unknown Org" ) ]] && NODE_ORG="$guide_org"
+      [[ -z "$NODE_CITY" || "$NODE_CITY" == "Unknown City" ]] && NODE_CITY=$(jq -r '.location.city // empty' <<<"$guide_raw")
+      [[ -z "$NODE_COUNTRY_CODE" || "$NODE_COUNTRY_CODE" == "XX" ]] && NODE_COUNTRY_CODE=$(jq -r '.location.country // empty' <<<"$guide_raw")
+    fi
+  fi
+
+  NODE_ASN="${NODE_ASN:-AS0}"
+  NODE_ORG="${NODE_ORG:-Unknown Org}"
+  NODE_CITY="${NODE_CITY:-Unknown City}"
+  NODE_COUNTRY_CODE="${NODE_COUNTRY_CODE:-XX}"
+
   # Classification & Anti-fraud via ipquery.io
-  local query_raw
-  query_raw=$(curl_wrapper GET "https://api.ipquery.io/${EXTERNAL_IPV4}" --timeout 4 2>/dev/null)
+  local query_raw=""
+  if [[ -n "$primary_ip" ]]; then
+    query_raw=$(curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
+  fi
   local is_vpn=false is_tor=false is_datacenter=false risk_score=""
 
   if [[ -n "$query_raw" ]] && jq -e . >/dev/null 2>&1 <<<"$query_raw"; then
@@ -459,12 +641,13 @@ get_vpn_node_info() {
     fi
   fi
 
-  if [[ "$is_datacenter" == "true" ]]; then
-    NODE_TYPE="Data Center / Hosting"
+  # Prioritize Tor -> VPN -> Datacenter -> Residential
+  if [[ "$is_tor" == "true" ]]; then
+    NODE_TYPE="Tor Exit Node"
   elif [[ "$is_vpn" == "true" ]]; then
     NODE_TYPE="Commercial VPN / Proxy"
-  elif [[ "$is_tor" == "true" ]]; then
-    NODE_TYPE="Tor Exit Node"
+  elif [[ "$is_datacenter" == "true" ]]; then
+    NODE_TYPE="Data Center / Hosting"
   elif [[ -n "$query_raw" && "$query_raw" != "null" ]]; then
     NODE_TYPE="Residential / ISP"
   else
@@ -509,51 +692,108 @@ get_vpn_node_info() {
   fi
 
   # Port 25 Outbound (native bash /dev/tcp with nc fallback)
-  if timeout 2 bash -c 'echo > /dev/tcp/smtp.gmail.com/25' 2>/dev/null; then
+  local tcp25_exit=0
+  timeout 2 bash -c 'echo > /dev/tcp/smtp.gmail.com/25' 2>/dev/null
+  tcp25_exit=$?
+  if [[ $tcp25_exit -eq 0 ]]; then
     NODE_PORT25_STATUS="Open"
+  elif [[ $tcp25_exit -eq 124 ]]; then
+    # Timed out - connection dropped by firewall, do not waste 2 more seconds on nc
+    NODE_PORT25_STATUS="Blocked"
   elif is_command_available nc && nc -z -w 2 smtp.gmail.com 25 2>/dev/null; then
     NODE_PORT25_STATUS="Open"
   else
     NODE_PORT25_STATUS="Blocked"
   fi
 
-  # UDP Connectivity
-  if is_command_available dig && dig +short +time=1 +tries=1 @1.1.1.1 cloudflare.com >/dev/null 2>&1; then
-    NODE_UDP_STATUS="Open (DNS Bidirectional)"
-  elif is_command_available nslookup && nslookup -timeout=1 cloudflare.com 1.1.1.1 >/dev/null 2>&1; then
-    NODE_UDP_STATUS="Open (DNS Bidirectional)"
-  elif timeout 2 bash -c 'echo > /dev/udp/1.1.1.1/53' 2>/dev/null; then
-    NODE_UDP_STATUS="Open (Outbound only)"
+  # UDP Connectivity (verify DNS resolution via 1.1.1.1 and fallback 8.8.8.8)
+  local udp_dns_ip="1.1.1.1"
+  local udp_dns_fallback="8.8.8.8"
+  if [[ "$IPV6_ONLY" == "true" ]] || [[ -z "$EXTERNAL_IPV4" && -n "$EXTERNAL_IPV6" ]]; then
+    udp_dns_ip="2606:4700:4700::1111"
+    udp_dns_fallback="2001:4860:4860::8888"
+  fi
+
+  if is_command_available dig; then
+    if dig +short +time=2 +tries=1 @"$udp_dns_ip" cloudflare.com 2>/dev/null | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F:]+' || \
+       dig +short +time=2 +tries=1 @"$udp_dns_fallback" cloudflare.com 2>/dev/null | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|[0-9a-fA-F:]+'; then
+      NODE_UDP_STATUS="Open (DNS Bidirectional)"
+    else
+      NODE_UDP_STATUS="Blocked"
+    fi
+  elif is_command_available nslookup; then
+    if nslookup -timeout=2 cloudflare.com "$udp_dns_ip" >/dev/null 2>&1 || \
+       nslookup -timeout=2 cloudflare.com "$udp_dns_fallback" >/dev/null 2>&1; then
+      NODE_UDP_STATUS="Open (DNS Bidirectional)"
+    else
+      NODE_UDP_STATUS="Blocked"
+    fi
   else
-    NODE_UDP_STATUS="Blocked"
+    NODE_UDP_STATUS="N/A (No DNS tools)"
   fi
 
   # RKN / Antifilter IP Registry Check
   if [[ -n "$EXTERNAL_IPV4" ]]; then
     local rkn_hit=false
+    local ip_list_ok=false
+    local ipsum_list_ok=false
+
     local rkn_list
-    rkn_list=$(curl -sL --connect-timeout 2 --max-time 3 "https://antifilter.download/list/ip.lst" 2>/dev/null || echo "")
-    if [[ -n "$rkn_list" ]] && grep -Fxq "$EXTERNAL_IPV4" <<<"$rkn_list"; then
-      rkn_hit=true
-    else
-      local prefix_24
-      prefix_24=$(echo "$EXTERNAL_IPV4" | sed -E 's/\.[0-9]+$/.0\/24/')
-      local ipsum_list
-      ipsum_list=$(curl -sL --connect-timeout 2 --max-time 3 "https://antifilter.network/download/ipsum.lst" 2>/dev/null || echo "")
-      if [[ -n "$ipsum_list" ]] && grep -Fq "$prefix_24" <<<"$ipsum_list"; then
+    rkn_list=$(curl_wrapper GET "https://antifilter.download/list/ip.lst" --timeout 4 2>/dev/null || echo "")
+    if [[ -n "$rkn_list" ]]; then
+      ip_list_ok=true
+      if grep -Fxq "$EXTERNAL_IPV4" <<<"$rkn_list"; then
         rkn_hit=true
+      fi
+    fi
+
+    if [[ "$rkn_hit" != "true" ]]; then
+      local ipsum_list
+      ipsum_list=$(curl_wrapper GET "https://antifilter.network/download/ipsum.lst" --timeout 4 2>/dev/null || echo "")
+      if [[ -n "$ipsum_list" ]]; then
+        ipsum_list_ok=true
+        if awk -v ip="$EXTERNAL_IPV4" '
+          function ip2int(s, oct, n) {
+            n = split(s, oct, ".")
+            if (n != 4) return -1
+            return ((oct[1] * 256 + oct[2]) * 256 + oct[3]) * 256 + oct[4]
+          }
+          BEGIN { target = ip2int(ip); hit = 0 }
+          {
+            line = $1
+            if (!line || line ~ /^#/) next
+            p = index(line, "/")
+            if (p > 0) {
+              cidr_ip = substr(line, 1, p - 1)
+              prefix = substr(line, p + 1) + 0
+              net = ip2int(cidr_ip)
+              if (net >= 0 && prefix >= 0 && prefix <= 32) {
+                size = 2 ^ (32 - prefix)
+                net_base = net - (net % size)
+                if (target >= net_base && target < net_base + size) { hit = 1; exit }
+              }
+            } else {
+              if (ip2int(line) == target) { hit = 1; exit }
+            }
+          }
+          END { exit (hit ? 0 : 1) }' <<<"$ipsum_list"; then
+          rkn_hit=true
+        fi
       fi
     fi
 
     if [[ "$rkn_hit" == "true" ]]; then
       NODE_RKN_STATUS="BLOCKED in RU (Antifilter Registry)"
       NODE_RKN_COLOR="$COLOR_DANGER"
-    else
+    elif [[ "$ip_list_ok" == "true" && "$ipsum_list_ok" == "true" ]]; then
       NODE_RKN_STATUS="Clean (Not in Registry)"
       NODE_RKN_COLOR="$COLOR_SUCCESS"
+    else
+      NODE_RKN_STATUS="N/A (Unreachable)"
+      NODE_RKN_COLOR="$COLOR_NULL"
     fi
   else
-    NODE_RKN_STATUS="N/A"
+    NODE_RKN_STATUS="N/A (IPv6 only)"
     NODE_RKN_COLOR="$COLOR_NULL"
   fi
 }
@@ -563,15 +803,62 @@ get_vpn_node_info() {
 # ------------------------------------------------------------------------------
 
 get_system_specs() {
-  # 1. CPU Model & Cores
-  NODE_CPU_MODEL=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//' || echo "Unknown CPU")
+  # 1. CPU Model & Cores (x86_64, aarch64 / ARM fallback)
+  local cpu_model=""
+  if is_command_available "lscpu"; then
+    cpu_model=$(lscpu 2>/dev/null | awk -F: '/Model name/ {print $2; exit}' | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//')
+  fi
+  if [[ -z "$cpu_model" ]]; then
+    cpu_model=$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//')
+  fi
+  if [[ -z "$cpu_model" ]]; then
+    cpu_model=$(grep -m1 -E "Hardware|Processor" /proc/cpuinfo 2>/dev/null | awk -F: '{print $2}' | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//')
+  fi
+  if [[ -z "$cpu_model" ]]; then
+    cpu_model=$(uname -m 2>/dev/null || echo "Generic CPU")
+  fi
+  NODE_CPU_MODEL="$cpu_model"
   NODE_CPU_CORES=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "1")
-  if [[ -z "$NODE_CPU_MODEL" ]]; then NODE_CPU_MODEL="Generic CPU"; fi
 
   # 2. Virtualization & Uptime
-  NODE_VIRT=$(systemd-detect-virt 2>/dev/null || echo "KVM")
-  if [[ "$NODE_VIRT" == "none" ]]; then NODE_VIRT="Bare-Metal"; fi
-  NODE_UPTIME=$(uptime -p 2>/dev/null | sed 's/^up //' || uptime 2>/dev/null | awk -F'( |,|:)+' '{print $6"h "$7"m"}' || echo "N/A")
+  if [[ -f /.dockerenv ]]; then
+    NODE_VIRT="docker"
+  elif [[ -f /run/.containerenv ]]; then
+    NODE_VIRT="container"
+  elif is_command_available "systemd-detect-virt"; then
+    local virt_out
+    if virt_out=$(systemd-detect-virt 2>/dev/null); then
+      if [[ "$virt_out" == "none" || -z "$virt_out" ]]; then
+        NODE_VIRT="Bare-Metal"
+      else
+        NODE_VIRT="$virt_out"
+      fi
+    else
+      NODE_VIRT="Bare-Metal"
+    fi
+  else
+    NODE_VIRT="Bare-Metal"
+  fi
+
+  if [[ -r /proc/uptime ]]; then
+    local up_sec up_int d h m
+    read -r up_sec _ < /proc/uptime
+    up_int="${up_sec%%.*}"
+    up_int="${up_int//[^0-9]/}"
+    up_int="${up_int:-0}"
+    d=$(( up_int / 86400 ))
+    h=$(( (up_int % 86400) / 3600 ))
+    m=$(( (up_int % 3600) / 60 ))
+    if (( d > 0 )); then
+      NODE_UPTIME="${d}d ${h}h ${m}m"
+    elif (( h > 0 )); then
+      NODE_UPTIME="${h}h ${m}m"
+    else
+      NODE_UPTIME="${m}m"
+    fi
+  else
+    NODE_UPTIME=$(uptime -p 2>/dev/null | sed 's/^up //' || uptime 2>/dev/null | awk -F'( |,|:)+' '{print $6"h "$7"m"}' || echo "N/A")
+  fi
 
   # 3. OS & Kernel
   if [[ -f /etc/os-release ]]; then
@@ -584,47 +871,53 @@ get_system_specs() {
 
   # 4. RAM & Disk
   if is_command_available "free"; then
-    NODE_RAM=$(free -m 2>/dev/null | awk '/Mem:/ {printf "%d MB / %d MB (%.1f%%)", $3, $2, ($3/$2)*100}')
+    NODE_RAM=$(free -m 2>/dev/null | awk '/Mem:/ {if ($2 > 0) printf "%d MB / %d MB (%.1f%%)", $3, $2, ($3/$2)*100; else printf "%d MB", $3}')
   else
     NODE_RAM="N/A"
   fi
   if is_command_available "df"; then
-    NODE_DISK=$(df -h / 2>/dev/null | awk 'NR==2 {printf "%s / %s (%s)", $3, $2, $5}')
+    NODE_DISK=$(df -h -P / 2>/dev/null | awk 'END {printf "%s / %s (%s)", $3, $2, $5}')
   else
     NODE_DISK="N/A"
   fi
 
-  # 5. CPU Steal measurement (Accurate 2.0s delta sample + all-time uptime ticks)
-  local u1 n1 s1 i1 w1 x1 q1 st1 g1 gn1 u2 n2 s2 i2 w2 x2 q2 st2 g2 gn2
+  # 5. CPU Steal measurement (Zero-sleep delta from start + all-time uptime ticks)
+  # Exclude double counting of guest and guest_nice (already part of user and nice)
+  local u1 n1 s1 i1 w1 x1 q1 st1 u2 n2 s2 i2 w2 x2 q2 st2
   if [[ -r /proc/stat ]]; then
-    read -r _ u1 n1 s1 i1 w1 x1 q1 st1 g1 gn1 _ < /proc/stat
-    local total_boot=$((u1 + n1 + s1 + i1 + w1 + x1 + q1 + st1 + ${g1:-0} + ${gn1:-0}))
+    read -r _ u2 n2 s2 i2 w2 x2 q2 st2 _ < /proc/stat
+    local total_boot=$(( ${u2:-0} + ${n2:-0} + ${s2:-0} + ${i2:-0} + ${w2:-0} + ${x2:-0} + ${q2:-0} + ${st2:-0} ))
     if (( total_boot > 0 )); then
-      NODE_CPU_STEAL_ALLTIME=$(awk -v s="$st1" -v t="$total_boot" 'BEGIN { printf "%.2f", (s/t)*100 }')
+      NODE_CPU_STEAL_ALLTIME=$(awk -v s="${st2:-0}" -v t="$total_boot" 'BEGIN { printf "%.2f", (s/t)*100 }')
     else
       NODE_CPU_STEAL_ALLTIME="0.00"
     fi
 
-    sleep 2.0
-
-    read -r _ u2 n2 s2 i2 w2 x2 q2 st2 g2 gn2 _ < /proc/stat
-    local total2=$((u2 + n2 + s2 + i2 + w2 + x2 + q2 + st2 + ${g2:-0} + ${gn2:-0}))
-    local diff_total=$((total2 - total_boot))
-    local diff_steal=$((st2 - st1))
-    if (( diff_total > 0 )); then
-      NODE_CPU_STEAL_NUM=$(awk -v s="$diff_steal" -v t="$diff_total" 'BEGIN { printf "%.1f", (s/t)*100 }')
+    if [[ -n "${CPU_STAT_START:-}" ]]; then
+      read -r _ u1 n1 s1 i1 w1 x1 q1 st1 _ <<<"$CPU_STAT_START"
+      local total1=$(( ${u1:-0} + ${n1:-0} + ${s1:-0} + ${i1:-0} + ${w1:-0} + ${x1:-0} + ${q1:-0} + ${st1:-0} ))
+      local diff_total=$((total_boot - total1))
+      local diff_steal=$(( ${st2:-0} - ${st1:-0} ))
+      if (( diff_steal < 0 )); then diff_steal=0; fi
+      if (( diff_total >= 50 )); then
+        NODE_CPU_STEAL_NUM=$(awk -v s="$diff_steal" -v t="$diff_total" 'BEGIN { printf "%.1f", (s/t)*100 }')
+      else
+        NODE_CPU_STEAL_NUM="$NODE_CPU_STEAL_ALLTIME"
+      fi
     else
-      NODE_CPU_STEAL_NUM="0.0"
+      NODE_CPU_STEAL_NUM="$NODE_CPU_STEAL_ALLTIME"
     fi
   else
     NODE_CPU_STEAL_NUM="0.0"
     NODE_CPU_STEAL_ALLTIME="0.00"
   fi
 
-  local steal_int
-  steal_int=$(grep -oE '^[0-9]+' <<<"$NODE_CPU_STEAL_NUM" || echo "0")
-  local alltime_int
-  alltime_int=$(grep -oE '^[0-9]+' <<<"$NODE_CPU_STEAL_ALLTIME" || echo "0")
+  local steal_int="${NODE_CPU_STEAL_NUM%%.*}"
+  steal_int="${steal_int//[^0-9]/}"
+  steal_int="${steal_int:-0}"
+  local alltime_int="${NODE_CPU_STEAL_ALLTIME%%.*}"
+  alltime_int="${alltime_int//[^0-9]/}"
+  alltime_int="${alltime_int:-0}"
 
   if (( steal_int > 10 || alltime_int > 5 )); then
     NODE_CPU_STEAL_COLOR="$COLOR_DANGER"
@@ -634,7 +927,7 @@ get_system_specs() {
     NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Moderate) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   else
     NODE_CPU_STEAL_COLOR="$COLOR_SUCCESS"
-    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Clean, замер 2.0s) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
+    NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Clean) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   fi
 }
 
@@ -675,7 +968,7 @@ query_single_geoip() {
       ;;
     "Ipregistry")
       local raw
-      raw=$(curl_wrapper GET "https://api.ipregistry.co/${ip_val}?key=tryout" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      raw=$(curl_wrapper GET "https://api.ipregistry.co/${ip_val}?key=tryout" --ip-version "$ip_ver" --header "Origin: https://ipregistry.co" --timeout 3 2>/dev/null)
       cc=$(jq -r '.location.country.code // empty' <<<"$raw")
       ;;
     "IP-API.co")
@@ -713,48 +1006,65 @@ query_single_geoip() {
       ;;
     "IPLocation.net")
       local raw
-      raw=$(curl_wrapper GET "https://api.iplocation.net/?ip=${ip_val}" --timeout 3 2>/dev/null)
+      raw=$(curl_wrapper GET "https://api.iplocation.net/?ip=${ip_val}" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
       cc=$(jq -r '.country_code2 // empty' <<<"$raw")
       ;;
     "ipbase.com")
       local raw
-      raw=$(curl_wrapper GET "https://api.ipbase.com/v1/json/?ip=${ip_val}" --timeout 3 2>/dev/null)
+      raw=$(curl_wrapper GET "https://api.ipbase.com/v1/json/?ip=${ip_val}" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
       cc=$(jq -r '.country_code // empty' <<<"$raw")
       ;;
     "ipquery.io")
       local raw
-      raw=$(curl_wrapper GET "https://api.ipquery.io/${ip_val}" --timeout 3 2>/dev/null)
+      raw=$(curl_wrapper GET "https://api.ipquery.io/${ip_val}" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
       cc=$(jq -r '.location.country_code // empty' <<<"$raw")
       ;;
     "IPAPI.is")
       local raw
-      raw=$(curl_wrapper GET "https://api.ipapi.is/?q=${ip_val}" --timeout 3 2>/dev/null)
+      raw=$(curl_wrapper GET "https://api.ipapi.is/?q=${ip_val}" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
       cc=$(jq -r '.country_code // .country // empty' <<<"$raw")
       ;;
     "RIPE NCC")
       local raw
-      raw=$(curl_wrapper GET "https://stat.ripe.net/data/whois/data.json?resource=${ip_val}" --timeout 3 2>/dev/null)
-      cc=$(jq -r '[(.data.records[0][]? | select(.key == "country") | .value)][0] // empty' <<<"$raw")
+      raw=$(curl_wrapper GET "https://rdap.db.ripe.net/ip/${ip_val}" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
+      cc=$(jq -r '.country // empty' <<<"$raw")
+      if [[ -z "$cc" && -n "$raw" ]]; then
+        cc=$(jq -r '[.. | objects | .adr? | .label? | strings | split("\n")[] | select(length > 0)][-1] // empty' <<<"$raw" 2>/dev/null)
+      fi
       ;;
     "IP.Guide")
       local raw
-      raw=$(curl_wrapper GET "https://ip.guide/${ip_val}" --timeout 3 2>/dev/null)
+      raw=$(curl_wrapper GET "https://ip.guide/${ip_val}" --ip-version "$ip_ver" --timeout 3 2>/dev/null)
       cc=$(jq -r '.location.country // .network.autonomous_system.country // empty' <<<"$raw")
       ;;
   esac
 
   # Normalize 2-letter uppercase or N/A
+  local country_name_regex='^[A-Za-z ]{3,}$'
   if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
     cc="${cc^^}"
-  elif [[ "$cc" =~ ^[A-Za-z]{3,}$ ]]; then
-    # Full name fallback
-    for code in "${!COUNTRY_NAMES[@]}"; do
-      if [[ "${COUNTRY_NAMES[$code],,}" == "${cc,,}" ]]; then
-        cc="$code"
-        break
-      fi
-    done
-  else
+  elif [[ "$cc" =~ $country_name_regex ]]; then
+    # Common aliases check
+    case "${cc,,}" in
+      "russian federation"|"russia") cc="RU" ;;
+      "united states"|"united states of america"|"usa") cc="US" ;;
+      "united kingdom"|"great britain"|"uk") cc="GB" ;;
+      "south korea"|"korea, republic of"|"republic of korea") cc="KR" ;;
+      "north korea"|"democratic people's republic of korea") cc="KP" ;;
+      "viet nam") cc="VN" ;;
+      "czechia") cc="CZ" ;;
+      *)
+        for code in "${!COUNTRY_NAMES[@]}"; do
+          if [[ "${COUNTRY_NAMES[$code],,}" == "${cc,,}" ]]; then
+            cc="$code"
+            break
+          fi
+        done
+        ;;
+    esac
+  fi
+
+  if [[ ! "$cc" =~ ^[A-Z]{2}$ ]]; then
     cc="$STATUS_NA"
   fi
 
@@ -772,13 +1082,26 @@ run_geoip_consensus() {
   local v6_dir="$TMP_WORK_DIR/geoip_v6"
   mkdir -p "$v4_dir" "$v6_dir"
 
-  # Launch parallel background queries
+  local running=0
+  local max_jobs=8
+
+  # Launch parallel background queries in batches of max_jobs
   for db in "${geoip_dbs[@]}"; do
     if [[ $IPV4_SUPPORTED -eq 1 ]]; then
       ( query_single_geoip "$db" "4" "$v4_dir/$db" ) &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     fi
     if [[ $IPV6_SUPPORTED -eq 1 ]]; then
       ( query_single_geoip "$db" "6" "$v6_dir/$db" ) &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     fi
   done
   wait
@@ -818,9 +1141,11 @@ lookup_twitter_x() {
 }
 
 lookup_claude_ai() {
-  local code resp
-  code=$(curl_http_code "https://claude.ai")
-  resp=$(curl_wrapper GET "https://claude.ai" --timeout 3 2>/dev/null)
+  local raw resp code
+  raw=$(curl_wrapper GET "https://claude.ai" --timeout 3 -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  code=$(tail -n 2 <<<"$raw" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+  resp=$(head -c 8192 <<<"$raw" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
   if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
     echo "Yes"
   elif [[ "$code" == "403" ]]; then
@@ -841,8 +1166,15 @@ lookup_rutracker() {
 }
 
 lookup_chatgpt() {
+  local ip_ver_arg=()
+  if [[ "$IPV6_ONLY" == "true" ]]; then
+    ip_ver_arg=(--ip-version "6")
+  elif [[ "$IPV4_ONLY" == "true" ]]; then
+    ip_ver_arg=(--ip-version "4")
+  fi
+
   local resp
-  resp=$(curl_wrapper POST "https://ab.chatgpt.com/v1/initialize" --ip-version "4" \
+  resp=$(curl_wrapper POST "https://ab.chatgpt.com/v1/initialize" "${ip_ver_arg[@]}" \
     --header "Statsig-Api-Key: $CHATGPT_STATSIG_API_KEY" --header "Content-Type: application/json" --data '{}' 2>/dev/null)
   local cc
   cc=$(jq -r '.derived_fields.country // empty' <<<"$resp" 2>/dev/null)
@@ -938,34 +1270,52 @@ lookup_youtube() {
   esac
 }
 
+parse_youtube_cdn_iata() {
+  local node="$1"
+  local google_node_regex='^([a-z]{3})[0-9]'
+  local isp_iata_regex='^[a-z]+-([a-z]{3})[0-9]'
+  local ggc_dash_regex='^[a-z]{2}-([a-z]{3})-'
+  local ggc_node_regex='^[a-z]{2}([a-z]{3})[a-z]-[a-z0-9]+$'
+
+  if [[ "$node" =~ $google_node_regex || "$node" =~ $isp_iata_regex || "$node" =~ $ggc_dash_regex || "$node" =~ $ggc_node_regex ]]; then
+    echo "${BASH_REMATCH[1]^^}"
+  fi
+}
+
 lookup_youtube_cdn() {
-  local resp code
-  code=$(curl_http_code "https://redirector.googlevideo.com/report_mapping")
+  local raw resp code
+  raw=$(curl_wrapper GET "https://redirector.googlevideo.com/report_mapping?di=no" --timeout 3 -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  code=$(tail -n 2 <<<"$raw" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
   if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
     echo "No ($code)"
     return
   fi
-  resp=$(curl_wrapper GET "https://redirector.googlevideo.com/report_mapping" 2>/dev/null)
+  resp=$(head -n 1 <<<"$raw")
+  local node_id
+  node_id=$(awk '{print $3}' <<<"$resp")
   local iata
-  iata=$(sed -n -E 's/.*=> *(tz)?([a-zA-Z]{3}).*/\2/p' <<<"$resp" | head -n 1 | tr '[:lower:]' '[:upper:]')
+  iata=$(parse_youtube_cdn_iata "$node_id")
   if [[ -z "$iata" ]]; then
-    iata=$(grep -oE "[a-z]{3}[0-9]+s[0-9]+" <<<"$resp" | head -n 1 | cut -c 1-3 | tr '[:lower:]' '[:upper:]')
+    iata=$(sed -n -E 's/.*=> *(tz)?([a-zA-Z]{3}).*/\2/p' <<<"$resp" | head -n 1 | tr '[:lower:]' '[:upper:]')
   fi
   if [[ -n "$iata" ]]; then echo "Yes ($iata)"; else echo "Yes"; fi
 }
 
 lookup_youtube_premium() {
-  local resp code
-  code=$(curl_http_code "https://www.youtube.com/premium" \
+  local raw resp code
+  raw=$(curl_wrapper GET "https://www.youtube.com/premium" \
     --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
-    --header "Accept-Language: en-US,en;q=0.9")
+    --header "Accept-Language: en-US,en;q=0.9" \
+    --timeout 4 \
+    -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  code=$(tail -n 2 <<<"$raw" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
   if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
     echo "No ($code)"
     return
   fi
-  resp=$(curl_wrapper GET "https://www.youtube.com/premium" \
-    --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
-    --header "Accept-Language: en-US,en;q=0.9" 2>/dev/null)
+  resp=$(head -c 16384 <<<"$raw" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
   if [[ -z "$resp" ]]; then
     echo "No (Empty)"
   elif grep -qi "YouTube Premium is not available in your country" <<<"$resp"; then
@@ -976,17 +1326,19 @@ lookup_youtube_premium() {
 }
 
 lookup_youtube_music() {
-  local resp code
-  code=$(curl_http_code "https://music.youtube.com/" \
+  local raw resp code
+  raw=$(curl_wrapper GET "https://music.youtube.com/" \
     --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
-    --header "Accept-Language: en-US,en;q=0.9")
+    --header "Accept-Language: en-US,en;q=0.9" \
+    --timeout 4 \
+    -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  code=$(tail -n 2 <<<"$raw" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
   if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
     echo "No ($code)"
     return
   fi
-  resp=$(curl_wrapper GET "https://music.youtube.com/" \
-    --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
-    --header "Accept-Language: en-US,en;q=0.9" 2>/dev/null)
+  resp=$(head -c 16384 <<<"$raw" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
   if [[ -z "$resp" ]]; then
     echo "No (Empty)"
   elif grep -qi "YouTube Music is not available in your area" <<<"$resp"; then
@@ -1006,14 +1358,15 @@ lookup_spotify_signup() {
 }
 
 lookup_netflix() {
-  local code resp cc=""
-  code=$(curl_http_code "https://www.netflix.com")
+  local raw resp code cc=""
+  raw=$(curl_wrapper GET "https://www.netflix.com" --timeout 4 -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  code=$(tail -n 2 <<<"$raw" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
   if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
     echo "No ($code)"
     return
   fi
-  resp=$(curl_wrapper GET "https://www.netflix.com" 2>/dev/null)
-  local cc
+  resp=$(head -c 16384 <<<"$raw" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
   cc=$(sed -n 's/.*"geolocation_country":"\([^"]*\)".*/\1/p' <<<"$resp" | head -n 1)
   if [[ -n "$cc" ]]; then echo "$cc"; else echo "Yes"; fi
 }
@@ -1076,262 +1429,204 @@ lookup_notion() {
 # 3. RU Reverse Geoblocking Lookups
 # ------------------------------------------------------------------------------
 
-# Uses -k to validate reachability even when Russian Минцифры CA is not in system trust store
-curl_ru_code() {
+check_ru_site() {
   local url="$1" timeout="${2:-4}"
-  local res
-  res=$(curl_wrapper GET "$url" -k --timeout "$timeout" -o /dev/null -w "%{http_code}" 2>/dev/null)
-  res="${res: -3}"
-  echo "${res:-000}"
+  local resp code body
+  resp=$(curl_wrapper GET "$url" -k -L --max-redirs 5 --timeout "$timeout" -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+  body=$(head -c 8192 <<<"$resp" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+    return
+  elif [[ "$code" =~ ^(403|429|439|498)$ ]]; then
+    echo "Blocked (WAF $code)"
+    return
+  elif ! [[ "$code" =~ ^(200|301|302|307)$ ]]; then
+    echo "Blocked ($code)"
+    return
+  fi
+
+  # Inspect response body for WAF / Captcha / Geo-drop stubs returning 200 OK
+  if LC_ALL=C.UTF-8 grep -qi -E "ddos-guard|ddos protection" <<<"$body"; then
+    echo "Blocked (DDoS-Guard)"
+  elif LC_ALL=C.UTF-8 grep -qi -E "qrator|firewallcaptcha|pow_challenge" <<<"$body"; then
+    echo "Blocked (Qrator)"
+  elif LC_ALL=C.UTF-8 grep -qi -E "smartcaptcha|showcaptcha|recaptcha|abt-challenge" <<<"$body"; then
+    echo "Blocked (Captcha)"
+  elif LC_ALL=C.UTF-8 grep -qi -E "доступ ограничен|за пределами рф|выключите vpn|access denied|доступ запрещен|нет соединения" <<<"$body"; then
+    echo "Blocked (Geo-restricted)"
+  else
+    echo "OK"
+  fi
 }
 
 lookup_gosuslugi() {
-  local code
-  code=$(curl_ru_code "https://www.gosuslugi.ru")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
+  check_ru_site "https://www.gosuslugi.ru" 4
 }
 
 lookup_nalog() {
-  local code
-  code=$(curl_ru_code "https://nalog.gov.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://nalog.gov.ru" 4
 }
 
 lookup_mosru() {
-  local code
-  code=$(curl_ru_code "https://www.mos.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://www.mos.ru" 4
 }
 
 lookup_rzd() {
-  local code
-  code=$(curl_ru_code "https://ticket.rzd.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://ticket.rzd.ru" 4
 }
 
 lookup_yandex() {
-  local resp
-  resp=$(curl_wrapper GET "https://ya.ru" -k --timeout 3 2>/dev/null)
-  if [[ "$resp" == *"smartcaptcha"* || "$resp" == *"showcaptcha"* ]]; then
-    echo "Captcha"
-  elif [[ -n "$resp" ]]; then
-    echo "OK"
-  else
-    echo "Blocked (Timeout)"
-  fi
+  check_ru_site "https://ya.ru" 3
 }
 
 lookup_vk() {
-  local code
-  code=$(curl_ru_code "https://vk.com")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
+  check_ru_site "https://vk.com" 4
 }
 
 lookup_sberbank() {
-  local code
-  code=$(curl_ru_code "https://www.sberbank.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://www.sberbank.ru" 4
 }
 
 lookup_tbank() {
-  local code
-  code=$(curl_ru_code "https://tbank.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://tbank.ru" 4
 }
 
 lookup_vtb() {
-  local code
-  code=$(curl_ru_code "https://www.vtb.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://www.vtb.ru" 4
 }
 
 lookup_alfabank() {
-  local code
-  code=$(curl_ru_code "https://alfabank.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://alfabank.ru" 4
 }
 
 lookup_avito() {
-  local code resp
-  resp=$(curl_wrapper GET "https://www.avito.ru" -k --timeout 3 2>/dev/null)
-  code=$(curl_ru_code "https://www.avito.ru" 3)
-  if [[ "$code" == "439" || "$code" == "429" || "$resp" == *"QRATOR"* || "$resp" == *"firewallCaptcha"* || "$resp" == *"pow_challenge"* ]]; then
+  local res
+  res=$(check_ru_site "https://www.avito.ru" 4)
+  if [[ "$res" == *"Qrator"* || "$res" == *"439"* ]]; then
     echo "Blocked (439 Qrator Captcha)"
-  elif [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout)"
   else
-    echo "Blocked ($code)"
+    echo "$res"
   fi
 }
 
 lookup_wildberries() {
-  local code
-  code=$(curl_ru_code "https://www.wildberries.ru" 4)
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "OK"
-  elif [[ "$code" =~ ^(498|403|429)$ ]]; then
-    echo "Blocked (WAF $code)"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout)"
-  else
-    echo "Blocked ($code)"
-  fi
+  check_ru_site "https://www.wildberries.ru" 4
 }
 
 lookup_ozon() {
-  local code body
-  code=$(curl_ru_code "https://www.ozon.ru" 4)
-  if [[ "$code" == "307" || "$code" =~ ^(200|301|302)$ ]]; then
-    body=$(curl_wrapper GET "https://www.ozon.ru" -k -L -b dummy --timeout 4 2>/dev/null)
-    if [[ "$body" == *"abt-challenge"* || "$body" == *"Выключите VPN"* || "$body" == *"Похоже, нет соединения"* ]]; then
-      echo "Blocked (Anti-VPN 403)"
-    else
-      echo "OK"
-    fi
-  elif [[ "$code" =~ ^(403|429)$ ]]; then
-    echo "Blocked (WAF $code)"
-  elif [[ "$code" == "000" ]]; then
-    echo "Blocked (Timeout / Geo-Drop)"
+  local res
+  res=$(check_ru_site "https://www.ozon.ru" 4)
+  if [[ "$res" == *"Captcha"* || "$res" == *"Geo-restricted"* ]]; then
+    echo "Blocked (Anti-VPN)"
   else
-    echo "Blocked ($code)"
+    echo "$res"
   fi
 }
 
 lookup_kinopoisk() {
-  local code
-  code=$(curl_ru_code "https://www.kinopoisk.ru")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "OK"; else echo "Blocked ($code)"; fi
+  check_ru_site "https://www.kinopoisk.ru" 4
 }
 
 run_services_check() {
   local s_dir="$TMP_WORK_DIR/services"
   mkdir -p "$s_dir"
 
-  # Parallel execution of 26 censorship and domestic checks
-  ( lookup_instagram > "$s_dir/instagram" ) &
-  ( lookup_discord > "$s_dir/discord" ) &
-  ( lookup_twitter_x > "$s_dir/twitter" ) &
-  ( lookup_chatgpt > "$s_dir/chatgpt" ) &
-  ( lookup_claude_ai > "$s_dir/claude" ) &
-  ( lookup_google > "$s_dir/google" ) &
-  ( lookup_gemini > "$s_dir/gemini" ) &
-  ( lookup_youtube > "$s_dir/youtube" ) &
-  ( lookup_youtube_cdn > "$s_dir/youtube_cdn" ) &
-  ( lookup_youtube_premium > "$s_dir/youtube_premium" ) &
-  ( lookup_youtube_music > "$s_dir/youtube_music" ) &
-  ( lookup_rutracker > "$s_dir/rutracker" ) &
-  ( lookup_spotify_signup > "$s_dir/spotify" ) &
-  ( lookup_netflix > "$s_dir/netflix" ) &
-  ( lookup_steam > "$s_dir/steam" ) &
-  ( lookup_playstation > "$s_dir/playstation" ) &
-  ( lookup_reddit > "$s_dir/reddit" ) &
-  ( lookup_apple > "$s_dir/apple" ) &
-  ( lookup_signal > "$s_dir/signal" ) &
-  ( lookup_notion > "$s_dir/notion" ) &
+  local check_pairs=(
+    "lookup_instagram" "$s_dir/instagram"
+    "lookup_discord" "$s_dir/discord"
+    "lookup_twitter_x" "$s_dir/twitter"
+    "lookup_chatgpt" "$s_dir/chatgpt"
+    "lookup_claude_ai" "$s_dir/claude"
+    "lookup_google" "$s_dir/google"
+    "lookup_gemini" "$s_dir/gemini"
+    "lookup_youtube" "$s_dir/youtube"
+    "lookup_youtube_cdn" "$s_dir/youtube_cdn"
+    "lookup_youtube_premium" "$s_dir/youtube_premium"
+    "lookup_youtube_music" "$s_dir/youtube_music"
+    "lookup_rutracker" "$s_dir/rutracker"
+    "lookup_spotify_signup" "$s_dir/spotify"
+    "lookup_netflix" "$s_dir/netflix"
+    "lookup_steam" "$s_dir/steam"
+    "lookup_playstation" "$s_dir/playstation"
+    "lookup_reddit" "$s_dir/reddit"
+    "lookup_apple" "$s_dir/apple"
+    "lookup_signal" "$s_dir/signal"
+    "lookup_notion" "$s_dir/notion"
+    "lookup_gosuslugi" "$s_dir/gosuslugi"
+    "lookup_nalog" "$s_dir/nalog"
+    "lookup_mosru" "$s_dir/mosru"
+    "lookup_rzd" "$s_dir/rzd"
+    "lookup_yandex" "$s_dir/yandex"
+    "lookup_vk" "$s_dir/vk"
+    "lookup_sberbank" "$s_dir/sberbank"
+    "lookup_tbank" "$s_dir/tbank"
+    "lookup_vtb" "$s_dir/vtb"
+    "lookup_alfabank" "$s_dir/alfabank"
+    "lookup_avito" "$s_dir/avito"
+    "lookup_wildberries" "$s_dir/wildberries"
+    "lookup_ozon" "$s_dir/ozon"
+    "lookup_kinopoisk" "$s_dir/kinopoisk"
+  )
 
-  ( lookup_gosuslugi > "$s_dir/gosuslugi" ) &
-  ( lookup_nalog > "$s_dir/nalog" ) &
-  ( lookup_mosru > "$s_dir/mosru" ) &
-  ( lookup_rzd > "$s_dir/rzd" ) &
-  ( lookup_yandex > "$s_dir/yandex" ) &
-  ( lookup_vk > "$s_dir/vk" ) &
-  ( lookup_sberbank > "$s_dir/sberbank" ) &
-  ( lookup_tbank > "$s_dir/tbank" ) &
-  ( lookup_vtb > "$s_dir/vtb" ) &
-  ( lookup_alfabank > "$s_dir/alfabank" ) &
-  ( lookup_avito > "$s_dir/avito" ) &
-  ( lookup_wildberries > "$s_dir/wildberries" ) &
-  ( lookup_ozon > "$s_dir/ozon" ) &
-  ( lookup_kinopoisk > "$s_dir/kinopoisk" ) &
-
+  local i=0 running=0 max_jobs=8
+  while (( i < ${#check_pairs[@]} )); do
+    local fn="${check_pairs[i]}"
+    local out="${check_pairs[i+1]}"
+    ( "$fn" > "$out" ) &
+    running=$((running + 1))
+    if (( running >= max_jobs )); then
+      wait -n 2>/dev/null || true
+      running=$((running - 1))
+    fi
+    ((i += 2))
+  done
   wait
 
   local yt_res
-  yt_res=$(<"$s_dir/youtube")
+  yt_res=$(read_val "$s_dir/youtube" "No")
   YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
   if [[ "$yt_res" == *"Без рекламы"* ]]; then
     YOUTUBE_AD_FREE=true
   fi
 
-  ARR_RU_UNBLOCK+=( "Instagram (Meta)"$'\t'"$(<"$s_dir/instagram")" )
-  ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(<"$s_dir/discord")" )
-  ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(<"$s_dir/twitter")" )
-  ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(<"$s_dir/chatgpt")" )
-  ARR_RU_UNBLOCK+=( "Anthropic Claude AI"$'\t'"$(<"$s_dir/claude")" )
-  ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(<"$s_dir/google")" )
-  ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(<"$s_dir/gemini")" )
+  ARR_RU_UNBLOCK+=( "Instagram (Meta)"$'\t'"$(read_val "$s_dir/instagram" "No")" )
+  ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(read_val "$s_dir/discord" "No")" )
+  ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(read_val "$s_dir/twitter" "No")" )
+  ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(read_val "$s_dir/chatgpt" "No")" )
+  ARR_RU_UNBLOCK+=( "Anthropic Claude AI"$'\t'"$(read_val "$s_dir/claude" "No")" )
+  ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(read_val "$s_dir/google" "N/A")" )
+  ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(read_val "$s_dir/gemini" "No")" )
   ARR_RU_UNBLOCK+=( "YouTube"$'\t'"$yt_res" )
-  ARR_RU_UNBLOCK+=( "YouTube CDN"$'\t'"$(<"$s_dir/youtube_cdn")" )
-  ARR_RU_UNBLOCK+=( "YouTube Premium"$'\t'"$(<"$s_dir/youtube_premium")" )
-  ARR_RU_UNBLOCK+=( "YouTube Music"$'\t'"$(<"$s_dir/youtube_music")" )
-  ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(<"$s_dir/rutracker")" )
-  ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(<"$s_dir/spotify")" )
-  ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(<"$s_dir/netflix")" )
-  ARR_RU_UNBLOCK+=( "Steam Store (Игры)"$'\t'"$(<"$s_dir/steam")" )
-  ARR_RU_UNBLOCK+=( "PlayStation Network"$'\t'"$(<"$s_dir/playstation")" )
-  ARR_RU_UNBLOCK+=( "Reddit"$'\t'"$(<"$s_dir/reddit")" )
-  ARR_RU_UNBLOCK+=( "Apple Services"$'\t'"$(<"$s_dir/apple")" )
-  ARR_RU_UNBLOCK+=( "Signal"$'\t'"$(<"$s_dir/signal")" )
-  ARR_RU_UNBLOCK+=( "Notion"$'\t'"$(<"$s_dir/notion")" )
+  ARR_RU_UNBLOCK+=( "YouTube CDN"$'\t'"$(read_val "$s_dir/youtube_cdn" "No")" )
+  ARR_RU_UNBLOCK+=( "YouTube Premium"$'\t'"$(read_val "$s_dir/youtube_premium" "No")" )
+  ARR_RU_UNBLOCK+=( "YouTube Music"$'\t'"$(read_val "$s_dir/youtube_music" "No")" )
+  ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(read_val "$s_dir/rutracker" "No")" )
+  ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(read_val "$s_dir/spotify" "No")" )
+  ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(read_val "$s_dir/netflix" "No")" )
+  ARR_RU_UNBLOCK+=( "Steam Store (Игры)"$'\t'"$(read_val "$s_dir/steam" "No")" )
+  ARR_RU_UNBLOCK+=( "PlayStation Network"$'\t'"$(read_val "$s_dir/playstation" "No")" )
+  ARR_RU_UNBLOCK+=( "Reddit"$'\t'"$(read_val "$s_dir/reddit" "No")" )
+  ARR_RU_UNBLOCK+=( "Apple Services"$'\t'"$(read_val "$s_dir/apple" "No")" )
+  ARR_RU_UNBLOCK+=( "Signal"$'\t'"$(read_val "$s_dir/signal" "No")" )
+  ARR_RU_UNBLOCK+=( "Notion"$'\t'"$(read_val "$s_dir/notion" "No")" )
 
-  ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(<"$s_dir/gosuslugi")" )
-  ARR_RU_LOCAL+=( "ФНС (nalog.gov.ru)"$'\t'"$(<"$s_dir/nalog")" )
-  ARR_RU_LOCAL+=( "Мос.ру (mos.ru)"$'\t'"$(<"$s_dir/mosru")" )
-  ARR_RU_LOCAL+=( "РЖД (ticket.rzd.ru)"$'\t'"$(<"$s_dir/rzd")" )
-  ARR_RU_LOCAL+=( "Яндекс (ya.ru)"$'\t'"$(<"$s_dir/yandex")" )
-  ARR_RU_LOCAL+=( "ВКонтакте (vk.com)"$'\t'"$(<"$s_dir/vk")" )
-  ARR_RU_LOCAL+=( "СберБанк (sberbank.ru)"$'\t'"$(<"$s_dir/sberbank")" )
-  ARR_RU_LOCAL+=( "Т-Банк (tbank.ru)"$'\t'"$(<"$s_dir/tbank")" )
-  ARR_RU_LOCAL+=( "ВТБ (vtb.ru)"$'\t'"$(<"$s_dir/vtb")" )
-  ARR_RU_LOCAL+=( "Альфа-Банк (alfabank.ru)"$'\t'"$(<"$s_dir/alfabank")" )
-  ARR_RU_LOCAL+=( "Авито (avito.ru)"$'\t'"$(<"$s_dir/avito")" )
-  ARR_RU_LOCAL+=( "Wildberries (wildberries.ru)"$'\t'"$(<"$s_dir/wildberries")" )
-  ARR_RU_LOCAL+=( "Озон (ozon.ru)"$'\t'"$(<"$s_dir/ozon")" )
-  ARR_RU_LOCAL+=( "Кинопоиск (kinopoisk.ru)"$'\t'"$(<"$s_dir/kinopoisk")" )
+  ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(read_val "$s_dir/gosuslugi" "Blocked")" )
+  ARR_RU_LOCAL+=( "ФНС (nalog.gov.ru)"$'\t'"$(read_val "$s_dir/nalog" "Blocked")" )
+  ARR_RU_LOCAL+=( "Мос.ру (mos.ru)"$'\t'"$(read_val "$s_dir/mosru" "Blocked")" )
+  ARR_RU_LOCAL+=( "РЖД (ticket.rzd.ru)"$'\t'"$(read_val "$s_dir/rzd" "Blocked")" )
+  ARR_RU_LOCAL+=( "Яндекс (ya.ru)"$'\t'"$(read_val "$s_dir/yandex" "Blocked")" )
+  ARR_RU_LOCAL+=( "ВКонтакте (vk.com)"$'\t'"$(read_val "$s_dir/vk" "Blocked")" )
+  ARR_RU_LOCAL+=( "СберБанк (sberbank.ru)"$'\t'"$(read_val "$s_dir/sberbank" "Blocked")" )
+  ARR_RU_LOCAL+=( "Т-Банк (tbank.ru)"$'\t'"$(read_val "$s_dir/tbank" "Blocked")" )
+  ARR_RU_LOCAL+=( "ВТБ (vtb.ru)"$'\t'"$(read_val "$s_dir/vtb" "Blocked")" )
+  ARR_RU_LOCAL+=( "Альфа-Банк (alfabank.ru)"$'\t'"$(read_val "$s_dir/alfabank" "Blocked")" )
+  ARR_RU_LOCAL+=( "Авито (avito.ru)"$'\t'"$(read_val "$s_dir/avito" "Blocked")" )
+  ARR_RU_LOCAL+=( "Wildberries (wildberries.ru)"$'\t'"$(read_val "$s_dir/wildberries" "Blocked")" )
+  ARR_RU_LOCAL+=( "Озон (ozon.ru)"$'\t'"$(read_val "$s_dir/ozon" "Blocked")" )
+  ARR_RU_LOCAL+=( "Кинопоиск (kinopoisk.ru)"$'\t'"$(read_val "$s_dir/kinopoisk" "Blocked")" )
 }
 
 # ------------------------------------------------------------------------------
@@ -1340,8 +1635,14 @@ run_services_check() {
 
 ping_host() {
   local host="$1" out_file="$2"
+  local ping_flags=()
+  if [[ "$IPV4_ONLY" == "true" ]]; then
+    ping_flags+=(-4)
+  elif [[ "$IPV6_ONLY" == "true" ]]; then
+    ping_flags+=(-6)
+  fi
   local p
-  p=$(LC_ALL=C ping -c 2 -W 2 "$host" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
+  p=$(LC_ALL=C ping "${ping_flags[@]}" -c 2 -W 2 "$host" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
   if [[ -n "$p" && "$p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     printf "%.1f ms" "$p" > "$out_file"
   else
@@ -1353,8 +1654,13 @@ run_region_speed_test() {
   local label="$1" ping_val="$2" host="$3" fallback_host="${4:-}"
   local speed="—"
 
-  if [[ "$RUN_IPERF" != "true" && "$RUN_FULL_IPERF" != "true" ]] || ! is_command_available "iperf3"; then
-    ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"—" )
+  local ping_num="${ping_val%% ms*}"
+  if [[ ! "$ping_num" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    ping_num="null"
+  fi
+
+  if [[ "$RUN_IPERF" != "true" || -z "$host" ]] || ! is_command_available "iperf3"; then
+    ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"—"$'\t'"$ping_num"$'\tnull\tnull' )
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "  %s  %s  %s\n" \
         "$(pad_str "$label" 38)" \
@@ -1364,45 +1670,70 @@ run_region_speed_test() {
     return
   fi
 
+  local iperf_ver_flag=()
+  if [[ "$IPV4_ONLY" == "true" ]]; then
+    iperf_ver_flag+=(-4)
+  elif [[ "$IPV6_ONLY" == "true" ]]; then
+    iperf_ver_flag+=(-6)
+  fi
+
   local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
   local target_hosts=("$host")
   if [[ -n "$fallback_host" && "$fallback_host" != "$host" ]]; then
     target_hosts+=("$fallback_host")
   fi
 
-  local time_dl="$IPERF_TIME_DL"
-  local time_ul="$IPERF_TIME_UL"
+  local test_time="${IPERF_TIME:-5}"
   local best_dl="—" best_ul="—" best_note=""
+  local best_dl_num="null" best_ul_num="null"
 
   for cur_host in "${target_hosts[@]}"; do
+    local port_attempts=0
     for p in "${ports[@]}"; do
-      # Fast TCP pre-check (0.8s timeout)
+      # Fast TCP pre-check (0.8s) to skip closed or firewalled ports immediately
       if ! timeout 0.8 bash -c "echo > /dev/tcp/$cur_host/$p" 2>/dev/null; then
         continue
       fi
+
+      ((port_attempts++))
 
       # 1. Download (Server -> Client, Reverse mode -R)
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
         if [[ -n "$COLOR_WARN" ]]; then
           printf "  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$time_dl"
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time"
         else
           printf "  %s  %s  * Замер DL (%ss)...\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$time_dl"
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$test_time"
         fi
       fi
 
-      local res_dl dl_bps dl="—"
-      res_dl=$(timeout $((time_dl + 3)) iperf3 -c "$cur_host" -p "$p" -R -t "$time_dl" -P 2 -J 2>/dev/null || echo "")
+      local res_dl dl_bps dl="—" dl_num="null"
+      res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -P 2 -J 2>/dev/null || echo "")
+      if [[ "$res_dl" == *"stream"* || "$res_dl" == *"parallel"* ]]; then
+        res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -J 2>/dev/null || echo "")
+      fi
+
       if [[ -z "$res_dl" || "$res_dl" == *"error"* ]]; then
-        res_dl=$(timeout $((time_dl + 3)) iperf3 -c "$cur_host" -p "$p" -R -t "$time_dl" -J 2>/dev/null || echo "")
-      fi
-      if [[ -n "$res_dl" ]]; then
-        dl_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_dl")
-        if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-          dl=$(awk -v b="$dl_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+        # Server busy or errored on this port; stop trying if attempt limit reached
+        if (( port_attempts >= 3 )); then
+          break
         fi
+        continue
       fi
+
+      dl_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_dl" 2>/dev/null || echo 0)
+      if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
+        dl_num=$(awk -v b="$dl_bps" 'BEGIN { printf "%d", (b/1000000)+0.5 }')
+        dl="${dl_num} Mbps"
+      fi
+
+      best_dl="$dl"
+      best_dl_num="$dl_num"
+      if [[ "$cur_host" == "$fallback_host" ]]; then best_note=" (F)"; fi
+
+      # Delay 1s to allow remote server daemon to cleanly release worker socket before Upload
+      sleep 1
 
       # 2. Upload (Client -> Server, Normal mode)
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
@@ -1410,53 +1741,66 @@ run_region_speed_test() {
         if [[ "$dl" == "—" ]]; then dl_hint="DL —"; fi
         if [[ -n "$COLOR_WARN" ]]; then
           printf "  %s  %s  \033[%sm⏳ Замер UL (%ss) [%s]...\033[0m\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$time_ul" "$dl_hint"
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time" "$dl_hint"
         else
           printf "  %s  %s  * Замер UL (%ss) [%s]...\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$time_ul" "$dl_hint"
+            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$test_time" "$dl_hint"
         fi
       fi
 
-      local res_ul ul_bps ul="—"
-      res_ul=$(timeout $((time_ul + 3)) iperf3 -c "$cur_host" -p "$p" -t "$time_ul" -P 2 -J 2>/dev/null || echo "")
-      if [[ -z "$res_ul" || "$res_ul" == *"error"* ]]; then
-        res_ul=$(timeout $((time_ul + 3)) iperf3 -c "$cur_host" -p "$p" -t "$time_ul" -J 2>/dev/null || echo "")
+      local res_ul ul_bps ul="—" ul_num="null"
+      res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -P 2 -J 2>/dev/null || echo "")
+      if [[ "$res_ul" == *"stream"* || "$res_ul" == *"parallel"* ]]; then
+        res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -J 2>/dev/null || echo "")
       fi
-      if [[ -n "$res_ul" ]]; then
-        ul_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_ul")
+
+      if [[ -n "$res_ul" && "$res_ul" != *"error"* ]]; then
+        ul_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_ul" 2>/dev/null || echo 0)
         if (( $(awk -v a="$ul_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-          ul=$(awk -v b="$ul_bps" 'BEGIN { printf "%d Mbps", (b/1000000)+0.5 }')
+          ul_num=$(awk -v b="$ul_bps" 'BEGIN { printf "%d", (b/1000000)+0.5 }')
+          ul="${ul_num} Mbps"
         fi
+        best_ul="$ul"
+        best_ul_num="$ul_num"
+      else
+        best_ul="Blocked / Error"
+        best_ul_num="null"
       fi
 
-      if [[ "$cur_host" == "$fallback_host" ]]; then best_note=" (F)"; fi
-
-      if [[ "$dl" != "—" && "$ul" != "—" ]]; then
-        best_dl="$dl"
-        best_ul="$ul"
-        break 2
-      elif [[ "$dl" != "—" && "$best_dl" == "—" ]]; then
-        best_dl="$dl"
-      elif [[ "$ul" != "—" && "$best_ul" == "—" ]]; then
-        best_ul="$ul"
-      fi
+      # Download succeeded; stop testing further ports/hosts
+      break 2
     done
   done
 
   if [[ "$best_dl" != "—" || "$best_ul" != "—" ]]; then
-    speed="↓ $best_dl / ↑ $best_ul$best_note"
+    if [[ "$best_ul" == "Blocked / Error" ]]; then
+      speed="↓ $best_dl / ↑ Blocked$best_note"
+    elif [[ "$best_dl" != "—" && "$best_ul" != "—" ]]; then
+      speed="↓ $best_dl / ↑ $best_ul$best_note"
+    elif [[ "$best_dl" != "—" ]]; then
+      speed="↓ $best_dl / ↑ —$best_note"
+    else
+      speed="↓ — / ↑ $best_ul$best_note"
+    fi
   else
     speed="—"
   fi
 
-  ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed" )
+  ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed"$'\t'"$ping_num"$'\t'"$best_dl_num"$'\t'"$best_ul_num" )
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if [[ -t 1 ]]; then
-      printf "\r\033[2K  %s  %s  %s\n" \
-        "$(pad_str "$label" 38)" \
-        "$(pad_str "$(format_value "$ping_val")" 14)" \
-        "$(format_value "$speed")"
+      if [[ "$NO_COLOR_MODE" == "true" || -n "${NO_COLOR:-}" ]]; then
+        printf "\r%80s\r  %s  %s  %s\n" "" \
+          "$(pad_str "$label" 38)" \
+          "$(pad_str "$(format_value "$ping_val")" 14)" \
+          "$(format_value "$speed")"
+      else
+        printf "\r\033[2K  %s  %s  %s\n" \
+          "$(pad_str "$label" 38)" \
+          "$(pad_str "$(format_value "$ping_val")" 14)" \
+          "$(format_value "$speed")"
+      fi
     else
       printf "  %s  %s  %s\n" \
         "$(pad_str "$label" 38)" \
@@ -1480,13 +1824,13 @@ measure_ru_pings() {
   ( ping_host "st.irkutsk.ertelecom.ru" "$p_dir/irk" ) &
   wait
 
-  RU_PING_MSK=$(<"$p_dir/msk")
-  RU_PING_SPB=$(<"$p_dir/spb")
-  RU_PING_KZN=$(<"$p_dir/kzn")
-  RU_PING_ROSTOV=$(<"$p_dir/rostov")
-  RU_PING_EKAT=$(<"$p_dir/ekat")
-  RU_PING_NSK=$(<"$p_dir/nsk")
-  RU_PING_IRK=$(<"$p_dir/irk")
+  RU_PING_MSK=$(read_val "$p_dir/msk" "N/A")
+  RU_PING_SPB=$(read_val "$p_dir/spb" "N/A")
+  RU_PING_KZN=$(read_val "$p_dir/kzn" "N/A")
+  RU_PING_ROSTOV=$(read_val "$p_dir/rostov" "N/A")
+  RU_PING_EKAT=$(read_val "$p_dir/ekat" "N/A")
+  RU_PING_NSK=$(read_val "$p_dir/nsk" "N/A")
+  RU_PING_IRK=$(read_val "$p_dir/irk" "N/A")
 }
 
 measure_ru_iperf() {
@@ -1511,9 +1855,36 @@ measure_ru_iperf() {
       "-----------------------"
   fi
 
+  # Find best region by lowest RTT
+  local best_idx=0
+  local min_rtt=999999.0
+  if [[ "$RUN_IPERF_ALL" != "true" && "$RUN_IPERF" == "true" ]]; then
+    local idx=0
+    for reg_entry in "${regions[@]}"; do
+      IFS=$'\t' read -r _ ping_val _ _ <<<"$reg_entry"
+      local num_val
+      num_val=$(grep -oE '^[0-9]+(\.[0-9]+)?' <<<"$ping_val" || echo "")
+      if [[ -n "$num_val" ]]; then
+        local is_better
+        is_better=$(awk -v v="$num_val" -v m="$min_rtt" 'BEGIN { print (v < m) ? 1 : 0 }')
+        if [[ "$is_better" -eq 1 ]]; then
+          min_rtt="$num_val"
+          best_idx="$idx"
+        fi
+      fi
+      ((idx++))
+    done
+  fi
+
+  local cur_idx=0
   for reg_entry in "${regions[@]}"; do
     IFS=$'\t' read -r label ping_val host fallback_host <<<"$reg_entry"
-    run_region_speed_test "$label" "$ping_val" "$host" "$fallback_host"
+    if [[ "$RUN_IPERF_ALL" == "true" || "$cur_idx" -eq "$best_idx" ]]; then
+      run_region_speed_test "$label" "$ping_val" "$host" "$fallback_host"
+    else
+      run_region_speed_test "$label" "$ping_val" "" ""
+    fi
+    ((cur_idx++))
   done
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
@@ -1522,6 +1893,12 @@ measure_ru_iperf() {
         printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
       else
         printf "  * Для замера пропускной способности iPerf3: apt install -y iperf3\n"
+      fi
+    elif [[ "$RUN_IPERF_ALL" != "true" && "$RUN_IPERF" == "true" ]]; then
+      if [[ -n "$COLOR_NULL" ]]; then
+        printf "  \033[%sm* Замер скорости проведен для оптимального региона по RTT. Для замера всех регионов: --iperf-all\033[0m\n" "$COLOR_NULL"
+      else
+        printf "  * Замер скорости проведен для оптимального региона по RTT. Для замера всех регионов: --iperf-all\n"
       fi
     fi
     printf "\n"
@@ -1533,29 +1910,25 @@ measure_ru_iperf() {
 # ------------------------------------------------------------------------------
 
 format_table() {
-  if is_command_available column; then
-    column -t -s $'\t'
-  else
-    awk -F '\t' '{
-      for (i=1; i<=NF; i++) {
-        clean = $i; gsub(/\033\[[0-9;]*m/, "", clean)
-        if (length(clean) > w[i]) w[i] = length(clean)
-      }
-      rows[NR] = $0
+  awk -F '\t' '{
+    for (i=1; i<=NF; i++) {
+      clean = $i; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
+      if (length(clean) > w[i]) w[i] = length(clean)
     }
-    END {
-      for (r=1; r<=NR; r++) {
-        n = split(rows[r], cols, "\t")
-        line = ""
-        for (i=1; i<=n; i++) {
-          clean = cols[i]; gsub(/\033\[[0-9;]*m/, "", clean)
-          pad = w[i] - length(clean) + 2
-          line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
-        }
-        print line
+    rows[NR] = $0
+  }
+  END {
+    for (r=1; r<=NR; r++) {
+      n = split(rows[r], cols, "\t")
+      line = ""
+      for (i=1; i<=n; i++) {
+        clean = cols[i]; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
+        pad = w[i] - length(clean) + 2
+        line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
       }
-    }'
-  fi
+      print line
+    }
+  }'
 }
 
 print_header() {
@@ -1571,7 +1944,11 @@ print_header() {
     printf "%s\n" "$line_sep"
   fi
   {
-    echo -e " IPv4:\t$(bold "${EXTERNAL_IPV4:-N/A}")"
+    if [[ -n "$EXTERNAL_IPV4" ]]; then
+      echo -e " IPv4:\t$(bold "$EXTERNAL_IPV4")"
+    else
+      echo -e " IPv4:\t$(color "$COLOR_NULL" "None (Not configured)")"
+    fi
     if [[ -n "$EXTERNAL_IPV6" ]]; then
       echo -e " IPv6:\t$(bold "$EXTERNAL_IPV6")"
     else
@@ -1596,13 +1973,25 @@ print_header() {
 }
 
 calculate_geoip_stats() {
+  local target_col="v4"
+  local col_label="IPv4"
+  if [[ $IPV4_SUPPORTED -ne 1 && $IPV6_SUPPORTED -eq 1 ]]; then
+    target_col="v6"
+    col_label="IPv6"
+  fi
+
   local top_code="" top_count=0 total=0
   declare -A counts=()
 
   for row in "${ARR_GEOIP[@]}"; do
-    IFS=$'\t' read -r _ v4 _ <<<"$row"
-    if [[ "$v4" =~ ^[A-Z]{2}$ ]]; then
-      counts["$v4"]=$(( counts["$v4"] + 1 ))
+    local db_name v4 v6
+    IFS=$'\t' read -r db_name v4 v6 <<<"$row"
+    local check_val="$v4"
+    if [[ "$target_col" == "v6" ]]; then
+      check_val="$v6"
+    fi
+    if [[ "$check_val" =~ ^[A-Z]{2}$ ]]; then
+      counts["$check_val"]=$(( counts["$check_val"] + 1 ))
       total=$(( total + 1 ))
     fi
   done
@@ -1631,14 +2020,11 @@ calculate_geoip_stats() {
     consensus_color="$COLOR_WARN"
   fi
 
-  if [[ -n "$consensus_color" ]]; then
-    printf "  Консенсус: \033[%sm%s (%s)\033[0m — %s/%s (%s%%)\n\n" "$consensus_color" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
-  else
-    printf "  Консенсус: %s (%s) — %s/%s (%s%%)\n\n" "$top_code" "$top_country" "$top_count" "$total" "$top_pct"
-  fi
+  local consensus_val="${top_code} (${top_country})"
+  printf "  Консенсус: %s — %s/%s (%s%%)\n\n" "$(color "$consensus_color" "$consensus_val")" "$top_count" "$total" "$top_pct"
 
   {
-    echo -e "  Код\tСтрана\tДоля (IPv4)"
+    echo -e "  Код\tСтрана\tДоля (${col_label})"
     echo -e "  ---\t------\t-----------"
     for c in "${!counts[@]}"; do
       echo -e "${counts[$c]}\t$c"
@@ -1653,7 +2039,7 @@ calculate_geoip_stats() {
 }
 
 print_geoip_table() {
-  printf "\033[1m1. 📍 Консенсус GeoIP баз данных (18 источников)\033[0m\n"
+  bold "1. 📍 Консенсус GeoIP баз данных (18 источников)"; printf "\n"
   if [[ $IPV6_SUPPORTED -eq 1 ]]; then
     {
       echo -e "  База данных\tIPv4\tIPv6"
@@ -1678,7 +2064,7 @@ print_geoip_table() {
 }
 
 print_western_unblock_table() {
-  printf "\033[1m2. 🌍 Доступность зарубежных сервисов (Western Services)\033[0m\n"
+  bold "2. 🌍 Доступность зарубежных сервисов (Western Services)"; printf "\n"
   {
     echo -e "  Сервис\tСтатус"
     echo -e "  ------------------------------------\t------"
@@ -1691,7 +2077,7 @@ print_western_unblock_table() {
 }
 
 print_ru_local_table() {
-  printf "\033[1m3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)\033[0m\n"
+  bold "3. 🇷🇺 Доступность сервисов РФ (Reverse Geoblocking)"; printf "\n"
   {
     echo -e "  Сервис\tСтатус"
     echo -e "  ------------------------------------\t------"
@@ -1703,108 +2089,12 @@ print_ru_local_table() {
   printf "\n"
 }
 
-print_connectivity_table() {
-  {
-    echo -e "  Регион (Узел связи)\tЗадержка (RTT)\tСкорость (↓ DL / ↑ UL)"
-    echo -e "  ------------------------------------\t--------------\t-----------------------"
-    for row in "${ARR_CONNECTIVITY[@]}"; do
-      IFS=$'\t' read -r name ping_val speed_val <<<"$row"
-      echo -e "  $name\t$(format_value "$ping_val")\t$(format_value "$speed_val")"
-    done
-  } | format_table
-  if ! is_command_available "iperf3"; then
-    if [[ -n "$COLOR_NULL" ]]; then
-      printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
-    else
-      printf "  * Для замера пропускной способности iPerf3: apt install -y iperf3\n"
-    fi
-  fi
-  printf "\n"
-}
-
-print_executive_summary() {
-  local ru_total=${#ARR_RU_LOCAL[@]}
-  local ru_ok=0
-  for row in "${ARR_RU_LOCAL[@]}"; do
-    IFS=$'\t' read -r _ val <<<"$row"
-    if [[ "$val" == "OK"* ]]; then
-      ru_ok=$((ru_ok + 1))
-    fi
-  done
-
-  local west_total=${#ARR_RU_UNBLOCK[@]}
-  local west_ok=0
-  for row in "${ARR_RU_UNBLOCK[@]}"; do
-    IFS=$'\t' read -r _ val <<<"$row"
-    if [[ "$val" != "No"* ]]; then
-      west_ok=$((west_ok + 1))
-    fi
-  done
-
-  local line_sep
-  line_sep=$(printf '%0.s─' {1..80})
-  if [[ -n "$COLOR_INFO" ]]; then
-    printf "\033[%sm%s\033[0m\n" "$COLOR_INFO" "$line_sep"
-    printf " \033[1m📊 Итоговый вердикт качества ноды под аудиторию РФ\033[0m\n"
-    printf "\033[%sm%s\033[0m\n" "$COLOR_INFO" "$line_sep"
-  else
-    printf "%s\n" "$line_sep"
-    printf " 📊 Итоговый вердикт качества ноды под аудиторию РФ\n"
-    printf "%s\n" "$line_sep"
-  fi
-
-  local verdict_str verdict_color
-  if [[ "$NODE_RKN_STATUS" == *"BLOCKED"* ]]; then
-    verdict_str="Критично: IP ноды заблокирован в РФ (реестр РКН)"
-    verdict_color="$COLOR_DANGER"
-  elif (( ru_ok >= 11 && west_ok >= 16 )); then
-    verdict_str="Отлично: подходит для VPN/прокси под РФ (доступ к Западу + нет гео-блокировок РФ)"
-    verdict_color="$COLOR_SUCCESS"
-  elif (( ru_ok >= 8 && west_ok >= 12 )); then
-    verdict_str="Удовлетворительно: базовые сервисы доступны, возможны ограничения части сервисов"
-    verdict_color="$COLOR_WARN"
-  else
-    verdict_str="Проблемная нода: высокий риск блокировок или утечек региона"
-    verdict_color="$COLOR_DANGER"
-  fi
-
-  {
-    echo -e "  Вердикт качества:\t$(color "$verdict_color" "$verdict_str")"
-    echo -e "  Зарубежные сервисы:\t$(format_value "$west_ok/$west_total доступны")"
-    echo -e "  Ресурсы РФ (Reverse Geo):\t$(format_value "$ru_ok/$ru_total открываются")"
-    echo -e "  Репутация IP и РКН:\t$NODE_RKN_STATUS | $NODE_RISK"
-  } | format_table
-  if [[ -n "$COLOR_INFO" ]]; then
-    printf "\033[%sm%s\033[0m\n\n" "$COLOR_INFO" "$line_sep"
-  else
-    printf "%s\n\n" "$line_sep"
-  fi
-}
-
 build_json() {
-  local geoip_json="{}"
-  for row in "${ARR_GEOIP[@]}"; do
-    IFS=$'\t' read -r name v4 v6 <<<"$row"
-    geoip_json=$(jq --arg k "$name" --arg v4 "$v4" --arg v6 "$v6" '.[$k] = {ipv4: $v4, ipv6: $v6}' <<<"$geoip_json")
-  done
-
-  local unblock_json="{}"
-  for row in "${ARR_RU_UNBLOCK[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    unblock_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$unblock_json")
-  done
-
-  local local_json="{}"
-  for row in "${ARR_RU_LOCAL[@]}"; do
-    IFS=$'\t' read -r name val <<<"$row"
-    local_json=$(jq --arg k "$name" --arg v "$val" '.[$k] = $v' <<<"$local_json")
-  done
-
-  local conn_json="{}"
-  for row in "${ARR_CONNECTIVITY[@]}"; do
-    IFS=$'\t' read -r name ping_val speed_val <<<"$row"
-    conn_json=$(jq --arg k "$name" --arg p "$ping_val" --arg s "$speed_val" '.[$k] = {latency: $p, speed: $s}' <<<"$conn_json")
-  done
+  local geoip_lines unblock_lines local_lines conn_lines
+  geoip_lines=$(printf "%s\n" "${ARR_GEOIP[@]}")
+  unblock_lines=$(printf "%s\n" "${ARR_RU_UNBLOCK[@]}")
+  local_lines=$(printf "%s\n" "${ARR_RU_LOCAL[@]}")
+  conn_lines=$(printf "%s\n" "${ARR_CONNECTIVITY[@]}")
 
   RESULT_JSON=$(jq -n \
     --arg ip "${EXTERNAL_IPV4:-}" \
@@ -1831,21 +2121,21 @@ build_json() {
     --arg port25 "${NODE_PORT25_STATUS:-}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
-    --argjson geoip "$geoip_json" \
-    --argjson unblock "$unblock_json" \
-    --argjson local "$local_json" \
-    --argjson connectivity "$conn_json" \
+    --arg geoip_raw "$geoip_lines" \
+    --arg unblock_raw "$unblock_lines" \
+    --arg local_raw "$local_lines" \
+    --arg conn_raw "$conn_lines" \
     '{
-      ip: $ip,
+      ip: (if $ip != "" then $ip else null end),
       ipv6: (if $ipv6 != "" then $ipv6 else null end),
       system: {
         os: $os,
         virt: $virt,
         uptime: $uptime,
         cpu_model: $cpu_model,
-        cpu_cores: ($cpu_cores | tonumber),
-        cpu_steal_pct: ($cpu_steal | tonumber),
-        cpu_steal_all_time_pct: ($cpu_steal_alltime | tonumber),
+        cpu_cores: ($cpu_cores | try tonumber catch 1),
+        cpu_steal_pct: ($cpu_steal | try tonumber catch 0.0),
+        cpu_steal_all_time_pct: ($cpu_steal_alltime | try tonumber catch 0.00),
         ram: $ram,
         disk: $disk
       },
@@ -1853,10 +2143,35 @@ build_json() {
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
       network: { bbr: $bbr, udp: $udp, port25: $port25 },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
-      geoip_consensus: $geoip,
-      ru_unblock: $unblock,
-      ru_local_services: $local,
-      connectivity: $connectivity
+      geoip_consensus: (
+        [$geoip_raw | split("\n")[] | select(length > 0) | split("\t")]
+        | map(select(.[0] != null and .[0] != "") | {key: .[0], value: {ipv4: (.[1] // "N/A"), ipv6: (.[2] // "N/A")}})
+        | from_entries
+      ),
+      ru_unblock: (
+        [$unblock_raw | split("\n")[] | select(length > 0) | split("\t")]
+        | map(select(.[0] != null and .[0] != "") | {key: .[0], value: (.[1] // "N/A")})
+        | from_entries
+      ),
+      ru_local_services: (
+        [$local_raw | split("\n")[] | select(length > 0) | split("\t")]
+        | map(select(.[0] != null and .[0] != "") | {key: .[0], value: (.[1] // "N/A")})
+        | from_entries
+      ),
+      connectivity: (
+        [$conn_raw | split("\n")[] | select(length > 0) | split("\t")]
+        | map(select(.[0] != null and .[0] != "") | {
+            key: .[0],
+            value: {
+              latency: (.[1] // "—"),
+              latency_ms: (if .[3] != null and .[3] != "" and .[3] != "null" then (.[3] | try tonumber catch null) else null end),
+              speed: (.[2] // "—"),
+              download_mbps: (if .[4] != null and .[4] != "" and .[4] != "null" then (.[4] | try tonumber catch null) else null end),
+              upload_mbps: (if .[5] != null and .[5] != "" and .[5] != "null" then (.[5] | try tonumber catch null) else null end)
+            }
+          })
+        | from_entries
+      )
     }')
 }
 
@@ -1868,21 +2183,27 @@ NodeCheck (RU Edition) — комплексный аудит серверных 
 
 Опции:
   -h, --help               Показать эту справку и выйти
+  -4, --ipv4               Принудительно использовать только IPv4
+  -6, --ipv6               Принудительно использовать только IPv6
   -j, --json               Вывод результатов в чистом формате JSON
   --no-iperf               Пропустить замер скорости iPerf3 (только пинг)
-  --full-iperf             Полный тест iPerf3 (по 5с на DL и UL)
-  --iperf-time СЕК         Время замера iPerf3 (по умолч.: 5с DL / 3с UL)
+  --iperf-all              Замер скорости iPerf3 по всем 7 регионам РФ (по умолч.: лучший по RTT)
+  --full-iperf             Расширенный тест iPerf3 (по 10с на прием и отдачу)
+  --iperf-time СЕК         Время замера iPerf3 на прием и отдачу (по умолч.: 5с)
   --no-color               Отключить цветовое форматирование ANSI
   -p, --proxy АДРЕС        Использовать SOCKS5/SOCKS5h прокси (хост:порт)
   -i, --interface ИНТЕРФЕЙС Привязать запросы к сетевому интерфейсу (eth0, ens3)
   --no-doh                 Отключить DNS-over-HTTPS (системный резолвер)
   --doh ПРОВАЙДЕР          Выбор DoH: cloudflare, quad9, adguard
   -v, --verbose            Подробное логирование сетевых запросов
-  -d, --debug              Режим отладки (сохранение трассировки в $DEBUG_LOG_FILE)
+  -d, --debug              Режим отладки (сохранение трассировки в сессионный log-файл)
 
 Примеры:
-  ./nodecheck.sh                         # Полный аудит (железо, GeoIP, сервисы, пинг и iPerf3)
-  ./nodecheck.sh --no-iperf              # Быстрый аудит без замера скорости (~10-12 секунд)
+  ./nodecheck.sh                         # Стандартный экспресс-аудит (железо, GeoIP, сервисы, пинг и iPerf3 до лучшего узла)
+  ./nodecheck.sh --iperf-all             # Аудит с замером скорости до всех регионов РФ
+  ./nodecheck.sh -4                      # Аудит только по IPv4
+  ./nodecheck.sh -6                      # Аудит только по IPv6
+  ./nodecheck.sh --no-iperf              # Быстрый аудит без замера скорости (~10-15 секунд)
   ./nodecheck.sh -j                      # Вывод в формате JSON для мониторинга и ботов
   ./nodecheck.sh --no-color > report.txt # Сохранение чистого отчета без ANSI-кодов
 
@@ -1895,6 +2216,16 @@ parse_arguments() {
       -h|--help)
         display_help
         exit 0
+        ;;
+      -4|--ipv4)
+        IPV4_ONLY=true
+        IPV6_ONLY=false
+        shift
+        ;;
+      -6|--ipv6)
+        IPV6_ONLY=true
+        IPV4_ONLY=false
+        shift
         ;;
       -v|--verbose)
         VERBOSE=true
@@ -1912,16 +2243,22 @@ parse_arguments() {
         RUN_IPERF=false
         shift
         ;;
+      --iperf-all)
+        RUN_IPERF_ALL=true
+        shift
+        ;;
       --full-iperf)
         RUN_FULL_IPERF=true
-        IPERF_TIME_DL=5
-        IPERF_TIME_UL=5
+        IPERF_TIME=10
+        IPERF_TIME_DL=10
+        IPERF_TIME_UL=10
         shift
         ;;
       --iperf-time)
-        if [[ $# -lt 2 || "$2" =~ [^0-9] ]]; then
-          error_exit "Для опции $1 требуется число секунд"
+        if [[ $# -lt 2 || -z "$2" || "$2" =~ [^0-9] || "$2" -le 0 ]]; then
+          error_exit "Для опции $1 требуется положительное число секунд (например, --iperf-time 5)"
         fi
+        IPERF_TIME="$2"
         IPERF_TIME_DL="$2"
         IPERF_TIME_UL="$2"
         shift 2
@@ -1963,6 +2300,8 @@ parse_arguments() {
 }
 
 main() {
+  CPU_STAT_START=$(head -n 1 /proc/stat 2>/dev/null || echo "")
+
   parse_arguments "$@"
   init_colors
 
@@ -1970,6 +2309,9 @@ main() {
   if [[ -z "$TMP_WORK_DIR" || ! -d "$TMP_WORK_DIR" ]]; then
     error_exit "Не удалось создать защищенный временный каталог в /tmp"
   fi
+  chmod 700 "$TMP_WORK_DIR" 2>/dev/null || true
+  DEBUG_LOG_FILE="$TMP_WORK_DIR/debug.log"
+
   trap cleanup EXIT
   trap 'cleanup; exit 130' INT
   trap 'cleanup; exit 143' TERM
@@ -2020,18 +2362,22 @@ main() {
   progress_clear
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "\033[1m4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)\033[0m\n"
+    bold "4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)"; printf "\n"
   fi
   measure_ru_iperf
-
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    print_executive_summary
-  fi
 
   if [[ "$JSON_OUTPUT" == "true" ]]; then
     build_json
     printf "%s\n" "$RESULT_JSON"
   fi
+
+  if [[ "$DEBUG" == "true" && -n "$DEBUG_LOG_FILE" && -f "$DEBUG_LOG_FILE" ]]; then
+    printf "\n--- [DEBUG TRACE LOG] ---\n" >&2
+    cat "$DEBUG_LOG_FILE" >&2
+    printf "--- [END DEBUG LOG] ---\n\n" >&2
+  fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" || -z "${BASH_SOURCE[0]}" ]]; then
+  main "$@"
+fi

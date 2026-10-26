@@ -1,29 +1,27 @@
-FROM alpine:3.21
+FROM ubuntu:24.04
 
 LABEL maintainer="justik13"
-LABEL description="NodeCheck (RU Edition) - VPN Node Quality & Censorship Auditor"
+LABEL description="NodeCheck (RU Edition) - Node Hardware, Network Quality, Geolocation & Access Auditor"
 
-RUN apk add --no-cache \
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
     curl \
     jq \
-    util-linux \
-    util-linux-misc \
+    iputils-ping \
     ca-certificates \
-    bind-tools \
+    bind9-dnsutils \
+    iperf3 \
+    gawk \
+    procps \
     coreutils \
     grep \
     sed \
-    gawk \
-    iperf3 \
-    iputils \
-    openssl
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY nodecheck.sh /app/nodecheck.sh
-COPY vpncheck.sh /app/vpncheck.sh
-COPY ipregion.sh /app/ipregion.sh
-RUN chmod +x /app/nodecheck.sh /app/vpncheck.sh /app/ipregion.sh
+COPY --chmod=755 nodecheck.sh /app/nodecheck.sh
 
 ENTRYPOINT ["/app/nodecheck.sh"]
 CMD []
