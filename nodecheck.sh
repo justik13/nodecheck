@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.5.1
+# NodeCheck (RU Edition) v3.5.3
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.5.2-ru"
+SCRIPT_VERSION="3.5.3-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -1697,8 +1697,19 @@ run_region_speed_test() {
   fi
 
   local test_time="${IPERF_TIME:-3}"
-  local best_dl="—" best_ul="—" best_note=""
+  local best_dl="—" best_ul="—"
   local best_dl_num="null" best_ul_num="null"
+
+  # Initial live progress before port scanning so terminal is never left frozen
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+    if [[ -n "$COLOR_WARN" ]]; then
+      printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
+        "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_WARN" "$test_time"
+    else
+      printf "\r\033[2K  %s  %s  * Замер DL (%ss)...\r" \
+        "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
+    fi
+  fi
 
   for cur_host in "${target_hosts[@]}"; do
     local port_attempts=0
@@ -1711,19 +1722,9 @@ run_region_speed_test() {
       ((port_attempts++))
 
       # 1. Download (Server -> Client, Reverse mode -R)
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        if [[ -n "$COLOR_WARN" ]]; then
-          printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time"
-        else
-          printf "\r%79s\r  %s  %s  * Замер DL (%ss)...\r" "" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
-        fi
-      fi
-
       local res_dl dl_bps dl="—" dl_num="null"
       res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -P "$streams" -J 2>/dev/null || echo "")
-      if [[ "$res_dl" == *"stream"* || "$res_dl" == *"parallel"* || "$res_dl" == *"unable to create a new stream"* ]]; then
+      if (( streams > 1 )) && [[ "$res_dl" == *"error"* ]] && [[ "$res_dl" == *"unable to create a new stream"* || "$res_dl" == *"parallel"* ]]; then
         res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -J 2>/dev/null || echo "")
       fi
 
@@ -1736,14 +1737,13 @@ run_region_speed_test() {
       fi
 
       dl_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_dl" 2>/dev/null || echo 0)
-      if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-        dl_num=$(awk -v b="$dl_bps" 'BEGIN { printf "%d", (b/1000000)+0.5 }')
+      if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 100000) ? 1 : 0 }') )); then
+        dl_num=$(awk -v b="$dl_bps" 'BEGIN { if (b >= 10000000) printf "%d", (b/1000000)+0.5; else printf "%.1f", b/1000000 }')
         dl="${dl_num} Mbps"
       fi
 
       best_dl="$dl"
       best_dl_num="$dl_num"
-      if [[ "$cur_host" == "$fallback_host" ]]; then best_note=" (F)"; fi
 
       # Delay 1s to allow remote server daemon to cleanly release worker socket before Upload
       sleep 1
@@ -1752,23 +1752,23 @@ run_region_speed_test() {
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
         if [[ -n "$COLOR_WARN" ]]; then
           printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер UL (%ss)...\033[0m\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time"
+            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_WARN" "$test_time"
         else
-          printf "\r%79s\r  %s  %s  * Замер UL (%ss)...\r" "" \
+          printf "\r\033[2K  %s  %s  * Замер UL (%ss)...\r" \
             "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
         fi
       fi
 
       local res_ul ul_bps ul="—" ul_num="null"
       res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -P "$streams" -J 2>/dev/null || echo "")
-      if [[ "$res_ul" == *"stream"* || "$res_ul" == *"parallel"* || "$res_ul" == *"unable to create a new stream"* ]]; then
+      if (( streams > 1 )) && [[ "$res_ul" == *"error"* ]] && [[ "$res_ul" == *"unable to create a new stream"* || "$res_ul" == *"parallel"* ]]; then
         res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -J 2>/dev/null || echo "")
       fi
 
       if [[ -n "$res_ul" && "$res_ul" != *"error"* ]]; then
         ul_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_ul" 2>/dev/null || echo 0)
-        if (( $(awk -v a="$ul_bps" 'BEGIN { print (a > 1000000) ? 1 : 0 }') )); then
-          ul_num=$(awk -v b="$ul_bps" 'BEGIN { printf "%d", (b/1000000)+0.5 }')
+        if (( $(awk -v a="$ul_bps" 'BEGIN { print (a > 100000) ? 1 : 0 }') )); then
+          ul_num=$(awk -v b="$ul_bps" 'BEGIN { if (b >= 10000000) printf "%d", (b/1000000)+0.5; else printf "%.1f", b/1000000 }')
           ul="${ul_num} Mbps"
         fi
         best_ul="$ul"
@@ -1785,13 +1785,13 @@ run_region_speed_test() {
 
   if [[ "$best_dl" != "—" || "$best_ul" != "—" ]]; then
     if [[ "$best_ul" == "Blocked / Error" ]]; then
-      speed="↓ $best_dl / ↑ Blocked$best_note"
+      speed="↓ $best_dl / ↑ Blocked"
     elif [[ "$best_dl" != "—" && "$best_ul" != "—" ]]; then
-      speed="↓ $best_dl / ↑ $best_ul$best_note"
+      speed="↓ $best_dl / ↑ $best_ul"
     elif [[ "$best_dl" != "—" ]]; then
-      speed="↓ $best_dl / ↑ —$best_note"
+      speed="↓ $best_dl / ↑ —"
     else
-      speed="↓ — / ↑ $best_ul$best_note"
+      speed="↓ — / ↑ $best_ul"
     fi
   else
     speed="—"
@@ -1801,17 +1801,10 @@ run_region_speed_test() {
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if [[ -t 1 ]]; then
-      if [[ "$NO_COLOR_MODE" == "true" || -n "${NO_COLOR:-}" ]]; then
-        printf "\r%79s\r  %s  %s  %s\n" "" \
-          "$(pad_str "$label" 35)" \
-          "$(pad_str "$ping_val" 14)" \
-          "$speed"
-      else
-        printf "\r\033[2K  %s  %s  %s\n" \
-          "$(pad_str "$label" 35)" \
-          "$(pad_str "$(format_value "$ping_val")" 14)" \
-          "$(format_value "$speed")"
-      fi
+      printf "\r\033[2K  %s  %s  %s\n" \
+        "$(pad_str "$label" 35)" \
+        "$(pad_str "$(format_value "$ping_val")" 14)" \
+        "$(format_value "$speed")"
     else
       printf "  %s  %s  %s\n" \
         "$(pad_str "$label" 35)" \
@@ -2158,7 +2151,7 @@ display_help() {
   cat <<EOF
 Использование: nodecheck.sh [ОПЦИИ]
 
-NodeCheck (RU Edition) — комплексный аудит серверных нод и сетевого стека под РФ
+NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит серверных нод и сетевого стека под РФ
 
 Опции:
   -h, --help               Показать эту справку и выйти
