@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.5.4
+# NodeCheck (RU Edition) v3.6.0
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.5.4-ru"
+SCRIPT_VERSION="3.6.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -66,14 +66,6 @@ NODE_CPU_STEAL="0.0%"
 NODE_CPU_STEAL_NUM="0.0"
 NODE_CPU_STEAL_ALLTIME="0.0"
 NODE_CPU_STEAL_COLOR="1;32"
-
-RU_PING_MSK=""
-RU_PING_SPB=""
-RU_PING_ROSTOV=""
-RU_PING_KZN=""
-RU_PING_EKAT=""
-RU_PING_NSK=""
-RU_PING_IRK=""
 
 YOUTUBE_AD_FREE=false
 YOUTUBE_DETECTED_CC=""
@@ -244,7 +236,7 @@ format_value() {
     "—")
       color "$COLOR_NULL" "—"
       ;;
-    ""|"null"|"$STATUS_NA"|*"N/A"*)
+    ""|"null"|"$STATUS_NA"|*"N/A"*|*"Unavailable"*)
       color "$COLOR_NULL" "$val"
       ;;
     "Yes"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*)
@@ -1709,18 +1701,18 @@ iperf_stream_test() {
       if [[ -n "$COLOR_TABLE_VALUE" ]]; then
         if [[ "$mode" == "DL" ]]; then
           printf "\r\033[2K  %s  %s  \033[%sm↓ ...\033[0m\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE"
+            "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE"
         else
           printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ ...\033[0m\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul"
+            "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul"
         fi
       else
         if [[ "$mode" == "DL" ]]; then
           printf "\r\033[2K  %s  %s  ↓ ...\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)"
+            "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)"
         else
           printf "\r\033[2K  %s  %s  ↓ %s / ↑ ...\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$dl_speed_for_ul"
+            "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$dl_speed_for_ul"
         fi
       fi
     fi
@@ -1766,18 +1758,18 @@ iperf_stream_test() {
             if [[ -n "$COLOR_TABLE_VALUE" ]]; then
               if [[ "$mode" == "DL" ]]; then
                 printf "\r\033[2K  %s  %s  \033[%sm↓ %s Mbps...\033[0m\r" \
-                  "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$mbps"
+                  "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$mbps"
               else
                 printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ %s Mbps...\033[0m\r" \
-                  "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
+                  "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
               fi
             else
               if [[ "$mode" == "DL" ]]; then
                 printf "\r\033[2K  %s  %s  ↓ %s Mbps...\r" \
-                  "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$mbps"
+                  "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$mbps"
               else
                 printf "\r\033[2K  %s  %s  ↓ %s / ↑ %s Mbps...\r" \
-                  "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$dl_speed_for_ul" "$mbps"
+                  "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$dl_speed_for_ul" "$mbps"
               fi
             fi
           fi
@@ -1803,8 +1795,36 @@ iperf_stream_test() {
   done
 }
 
+# Regional test targets: Region | City | Provider | Host | Port
+RU_REGIONAL_SERVERS=(
+  "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'5201
+  "Центральный регион"$'\t'"Москва"$'\t'"ЭР-Телеком / Дом.ру"$'\t'"st.msk.ertelecom.ru"$'\t'5201
+  "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'3333
+  "Северо-Западный регион"$'\t'"Санкт-Петербург"$'\t'"ЭР-Телеком"$'\t'"st.spb.ertelecom.ru"$'\t'5201
+  "Приволжский регион"$'\t'"Казань"$'\t'"ЭР-Телеком"$'\t'"st.kzn.ertelecom.ru"$'\t'5201
+  "Приволжский регион"$'\t'"Казань"$'\t'"МТС"$'\t'"kazst.st.mtsws.net"$'\t'3333
+  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ЭР-Телеком"$'\t'"st.nn.ertelecom.ru"$'\t'5201
+  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ТТК"$'\t'"speed-nn.vtt.net"$'\t'5201
+  "Приволжский регион"$'\t'"Самара"$'\t'"ЭР-Телеком"$'\t'"st.samara.ertelecom.ru"$'\t'5201
+  "Южный регион"$'\t'"Ростов-на-Дону"$'\t'"ЭР-Телеком"$'\t'"st.rostov.ertelecom.ru"$'\t'5201
+  "Южный регион"$'\t'"Краснодар"$'\t'"МТС"$'\t'"kndst.st.mtsws.net"$'\t'3333
+  "Южный регион"$'\t'"Волгоград"$'\t'"ТТК"$'\t'"speed-vgd.vtt.net"$'\t'5201
+  "Уральский регион"$'\t'"Екатеринбург"$'\t'"ЭР-Телеком"$'\t'"st.ekat.ertelecom.ru"$'\t'5201
+  "Уральский регион"$'\t'"Тюмень"$'\t'"ЭР-Телеком"$'\t'"st.tmn.ertelecom.ru"$'\t'5201
+  "Уральский регион"$'\t'"Тюмень"$'\t'"МТС"$'\t'"tumst.st.mtsws.net"$'\t'3333
+  "Уральский регион"$'\t'"Челябинск"$'\t'"ЭР-Телеком"$'\t'"st.chel.ertelecom.ru"$'\t'5201
+  "Уральский регион"$'\t'"Пермь"$'\t'"ЭР-Телеком"$'\t'"st.perm.ertelecom.ru"$'\t'5201
+  "Уральский регион"$'\t'"Уфа"$'\t'"ЭР-Телеком"$'\t'"st.ufa.ertelecom.ru"$'\t'5201
+  "Сибирский регион"$'\t'"Новосибирск"$'\t'"ЭР-Телеком"$'\t'"st.nsk.ertelecom.ru"$'\t'5201
+  "Сибирский регион"$'\t'"Красноярск"$'\t'"ЭР-Телеком"$'\t'"st.krsk.ertelecom.ru"$'\t'5201
+  "Сибирский регион"$'\t'"Омск"$'\t'"ЭР-Телеком"$'\t'"st.omsk.ertelecom.ru"$'\t'5201
+  "Дальневосточный регион"$'\t'"Иркутск"$'\t'"ЭР-Телеком"$'\t'"st.irkutsk.ertelecom.ru"$'\t'5201
+  "Дальневосточный регион"$'\t'"Якутск"$'\t'"МТС"$'\t'"yktst.st.mtsws.net"$'\t'3333
+)
+
 run_region_speed_test() {
-  local label="$1" ping_val="$2" host="$3" fallback_host="${4:-}"
+  local region="$1" city="$2" provider="$3" host="$4" port="$5" ping_val="$6"
+  local label="• ${city} (${provider})"
   local speed="—"
 
   local ping_num="${ping_val%% ms*}"
@@ -1813,11 +1833,11 @@ run_region_speed_test() {
   fi
 
   if [[ "$RUN_IPERF" != "true" || -z "$host" ]] || ! is_command_available "iperf3"; then
-    ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"—"$'\t'"$ping_num"$'\tnull\tnull' )
+    ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$port"$'\t'"$ping_val"$'\t'"$ping_num"$'\t—\tnull\tnull' )
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "  %s  %s  %s\n" \
-        "$(pad_str "$label" 35)" \
-        "$(pad_str "$(format_value "$ping_val")" 14)" \
+        "$(pad_str "$label" 37)" \
+        "$(pad_str "$(format_value "$ping_val")" 10)" \
         "$(format_value "—")"
     fi
     return
@@ -1839,10 +1859,9 @@ run_region_speed_test() {
     fi
   fi
 
-  local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
-  local target_hosts=("$host")
-  if [[ -n "$fallback_host" && "$fallback_host" != "$host" ]]; then
-    target_hosts+=("$fallback_host")
+  local ports=("$port")
+  if [[ "$port" -eq 5201 ]]; then
+    ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
   fi
 
   local test_time="${IPERF_TIME:-3}"
@@ -1853,67 +1872,65 @@ run_region_speed_test() {
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
     if [[ -n "$COLOR_TABLE_VALUE" ]]; then
       printf "\r\033[2K  %s  %s  \033[%sm↓ ...\033[0m\r" \
-        "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE"
+        "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE"
     else
       printf "\r\033[2K  %s  %s  ↓ ...\r" \
-        "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)"
+        "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)"
     fi
   fi
 
-  for cur_host in "${target_hosts[@]}"; do
-    local port_attempts=0
-    for p in "${ports[@]}"; do
-      # Fast TCP pre-check (0.8s) to skip closed or firewalled ports immediately
-      if ! timeout 0.8 bash -c "echo > /dev/tcp/$cur_host/$p" 2>/dev/null; then
-        continue
+  local port_attempts=0
+  for p in "${ports[@]}"; do
+    # Fast TCP pre-check (0.8s) to skip closed or firewalled ports immediately
+    if ! timeout 0.8 bash -c "echo > /dev/tcp/$host/$p" 2>/dev/null; then
+      continue
+    fi
+
+    ((port_attempts++))
+
+    # 1. Download (Server -> Client, Reverse mode -R)
+    iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+    if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
+      # Server busy or errored on this port; stop trying if attempt limit reached
+      if (( port_attempts >= 2 )); then
+        break
       fi
+      continue
+    fi
 
-      ((port_attempts++))
+    best_dl="$IPERF_LAST_STR"
+    best_dl_num="$IPERF_LAST_NUM"
 
-      # 1. Download (Server -> Client, Reverse mode -R)
-      iperf_stream_test "$cur_host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
-      if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
-        # Server busy or errored on this port; stop trying if attempt limit reached
-        if (( port_attempts >= 2 )); then
-          break
-        fi
-        continue
-      fi
-
-      best_dl="$IPERF_LAST_STR"
-      best_dl_num="$IPERF_LAST_NUM"
-
-      # Prepare terminal state for upload before the 1s socket-drain pause
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        if [[ -n "$COLOR_TABLE_VALUE" ]]; then
-          printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ ...\033[0m\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$best_dl"
-        else
-          printf "\r\033[2K  %s  %s  ↓ %s / ↑ ...\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$best_dl"
-        fi
-      fi
-
-      # Delay 1s to allow remote server daemon to cleanly release worker socket before Upload
-      sleep 1
-
-      # 2. Upload (Client -> Server, Normal mode)
-      iperf_stream_test "$cur_host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
-      if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
-        best_ul="$IPERF_LAST_STR"
-        best_ul_num="$IPERF_LAST_NUM"
+    # Prepare terminal state for upload before socket-drain pause
+    if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+      if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+        printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ ...\033[0m\r" \
+          "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$best_dl"
       else
-        best_ul="Blocked / Error"
-        best_ul_num="null"
+        printf "\r\033[2K  %s  %s  ↓ %s / ↑ ...\r" \
+          "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$best_dl"
       fi
+    fi
 
-      # Download succeeded; stop testing further ports/hosts
-      break 2
-    done
+    # Delay 1s to allow remote server daemon to cleanly release worker socket before Upload
+    sleep 1
+
+    # 2. Upload (Client -> Server, Normal mode)
+    iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
+      best_ul="$IPERF_LAST_STR"
+      best_ul_num="$IPERF_LAST_NUM"
+    else
+      best_ul="Blocked"
+      best_ul_num="null"
+    fi
+
+    # Download succeeded; test completed
+    break
   done
 
   if [[ "$best_dl" != "—" || "$best_ul" != "—" ]]; then
-    if [[ "$best_ul" == "Blocked / Error" ]]; then
+    if [[ "$best_ul" == "Blocked" ]]; then
       speed="↓ $best_dl / ↑ Blocked"
     elif [[ "$best_dl" != "—" && "$best_ul" != "—" ]]; then
       speed="↓ $best_dl / ↑ $best_ul"
@@ -1923,21 +1940,21 @@ run_region_speed_test() {
       speed="↓ — / ↑ $best_ul"
     fi
   else
-    speed="—"
+    speed="Unavailable"
   fi
 
-  ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"$speed"$'\t'"$ping_num"$'\t'"$best_dl_num"$'\t'"$best_ul_num" )
+  ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$port"$'\t'"$ping_val"$'\t'"$ping_num"$'\t'"$speed"$'\t'"$best_dl_num"$'\t'"$best_ul_num" )
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if [[ -t 1 ]]; then
       printf "\r\033[2K  %s  %s  %s\n" \
-        "$(pad_str "$label" 35)" \
-        "$(pad_str "$(format_value "$ping_val")" 14)" \
+        "$(pad_str "$label" 37)" \
+        "$(pad_str "$(format_value "$ping_val")" 10)" \
         "$(format_value "$speed")"
     else
       printf "  %s  %s  %s\n" \
-        "$(pad_str "$label" 35)" \
-        "$(pad_str "$ping_val" 14)" \
+        "$(pad_str "$label" 37)" \
+        "$(pad_str "$ping_val" 10)" \
         "$speed"
     fi
   fi
@@ -1947,55 +1964,51 @@ measure_ru_pings() {
   local p_dir="$TMP_WORK_DIR/pings"
   mkdir -p "$p_dir"
 
-  # Ping 7 macro-regions across Russia in parallel
-  ( ping_host "st.msk.ertelecom.ru" "$p_dir/msk" ) &
-  ( ping_host "st.spb.ertelecom.ru" "$p_dir/spb" ) &
-  ( ping_host "st.kzn.ertelecom.ru" "$p_dir/kzn" ) &
-  ( ping_host "st.rostov.ertelecom.ru" "$p_dir/rostov" ) &
-  ( ping_host "st.ekat.ertelecom.ru" "$p_dir/ekat" ) &
-  ( ping_host "st.nsk.ertelecom.ru" "$p_dir/nsk" ) &
-  ( ping_host "st.irkutsk.ertelecom.ru" "$p_dir/irk" ) &
+  # Ping all unique regional hosts in parallel
+  for srv in "${RU_REGIONAL_SERVERS[@]}"; do
+    IFS=$'\t' read -r _ _ _ host _ <<<"$srv"
+    if [[ ! -f "$p_dir/$host" ]]; then
+      touch "$p_dir/$host"
+      ( ping_host "$host" "$p_dir/$host" ) &
+    fi
+  done
   wait
-
-  RU_PING_MSK=$(read_val "$p_dir/msk" "N/A")
-  RU_PING_SPB=$(read_val "$p_dir/spb" "N/A")
-  RU_PING_KZN=$(read_val "$p_dir/kzn" "N/A")
-  RU_PING_ROSTOV=$(read_val "$p_dir/rostov" "N/A")
-  RU_PING_EKAT=$(read_val "$p_dir/ekat" "N/A")
-  RU_PING_NSK=$(read_val "$p_dir/nsk" "N/A")
-  RU_PING_IRK=$(read_val "$p_dir/irk" "N/A")
 }
 
 measure_ru_iperf() {
-  local regions=(
-    "Москва (Центр, ER-Telecom / MSK-IX)"$'\t'"$RU_PING_MSK"$'\t'"st.msk.ertelecom.ru"$'\t'"spd-rudp.hostkey.ru"
-    "Санкт-Петербург (Северо-Запад, SPB)"$'\t'"$RU_PING_SPB"$'\t'"st.spb.ertelecom.ru"$'\t'"st.yar.ertelecom.ru"
-    "Казань (Поволжье, ER-Telecom)"$'\t'"$RU_PING_KZN"$'\t'"st.kzn.ertelecom.ru"$'\t'"st.chelny.ertelecom.ru"
-    "Ростов-на-Дону (Юг, ER-Telecom)"$'\t'"$RU_PING_ROSTOV"$'\t'"st.rostov.ertelecom.ru"$'\t'"st.volgograd.ertelecom.ru"
-    "Екатеринбург (Урал, ER-Telecom)"$'\t'"$RU_PING_EKAT"$'\t'"st.ekat.ertelecom.ru"$'\t'"st.chel.ertelecom.ru"
-    "Новосибирск (Сибирь, ER-Telecom)"$'\t'"$RU_PING_NSK"$'\t'"st.nsk.ertelecom.ru"$'\t'"st.tomsk.ertelecom.ru"
-    "Иркутск (Восточная Сибирь, ER)"$'\t'"$RU_PING_IRK"$'\t'"st.irkutsk.ertelecom.ru"$'\t'"st.krsk.ertelecom.ru"
-  )
+  local p_dir="$TMP_WORK_DIR/pings"
+  local current_region=""
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    bold "4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)"; printf "\n"
-    printf "  %s  %s  %s\n" \
-      "$(pad_str "Регион (Узел связи)" 35)" \
-      "$(pad_str "Задержка (RTT)" 14)" \
-      "Скорость (↓ DL / ↑ UL)"
-    printf "  %s  %s  %s\n" \
-      "$(pad_str "-----------------------------------" 35)" \
-      "$(pad_str "--------------" 14)" \
-      "----------------------"
+    bold "4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)"; printf "\n\n"
   fi
 
-  for reg_entry in "${regions[@]}"; do
-    IFS=$'\t' read -r label ping_val host fallback_host <<<"$reg_entry"
-    run_region_speed_test "$label" "$ping_val" "$host" "$fallback_host"
+  for srv_entry in "${RU_REGIONAL_SERVERS[@]}"; do
+    IFS=$'\t' read -r region city provider host port <<<"$srv_entry"
+
+    if [[ "$JSON_OUTPUT" != "true" && "$region" != "$current_region" ]]; then
+      if [[ -n "$current_region" ]]; then
+        printf "\n"
+      fi
+      if [[ -n "$COLOR_BOLD" ]]; then
+        printf "  \033[%sm[%s]\033[0m\n" "$COLOR_BOLD" "$region"
+      else
+        printf "  [%s]\n" "$region"
+      fi
+      current_region="$region"
+    fi
+
+    local ping_val="N/A"
+    if [[ -f "$p_dir/$host" ]]; then
+      ping_val=$(read_val "$p_dir/$host" "N/A")
+    fi
+
+    run_region_speed_test "$region" "$city" "$provider" "$host" "$port" "$ping_val"
   done
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if ! is_command_available "iperf3"; then
+      printf "\n"
       if [[ -n "$COLOR_NULL" ]]; then
         printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
       else
@@ -2262,16 +2275,17 @@ build_json() {
       connectivity: (
         [$conn_raw | split("\n")[] | select(length > 0) | split("\t")]
         | map(select(.[0] != null and .[0] != "") | {
-            key: .[0],
-            value: {
-              latency: (.[1] // "—"),
-              latency_ms: (if .[3] != null and .[3] != "" and .[3] != "null" then (.[3] | try tonumber catch null) else null end),
-              speed: (.[2] // "—"),
-              download_mbps: (if .[4] != null and .[4] != "" and .[4] != "null" then (.[4] | try tonumber catch null) else null end),
-              upload_mbps: (if .[5] != null and .[5] != "" and .[5] != "null" then (.[5] | try tonumber catch null) else null end)
-            }
+            region: .[0],
+            city: .[1],
+            provider: .[2],
+            host: .[3],
+            port: (.[4] | try tonumber catch 5201),
+            latency: (.[5] // "—"),
+            latency_ms: (if .[6] != null and .[6] != "" and .[6] != "null" then (.[6] | try tonumber catch null) else null end),
+            speed: (.[7] // "—"),
+            download_mbps: (if .[8] != null and .[8] != "" and .[8] != "null" then (.[8] | try tonumber catch null) else null end),
+            upload_mbps: (if .[9] != null and .[9] != "" and .[9] != "null" then (.[9] | try tonumber catch null) else null end)
           })
-        | from_entries
       )
     }')
 }
@@ -2467,7 +2481,7 @@ main() {
   fi
 
   # 4. Multi-Region Pings & Speedtest
-  progress_status "Замер задержки RTT до 7 регионов РФ"
+  progress_status "Замер задержки RTT по регионам РФ"
   measure_ru_pings
   progress_clear
 
