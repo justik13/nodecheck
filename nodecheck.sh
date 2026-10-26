@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.6.0
+# NodeCheck (RU Edition) v3.6.1
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.6.0-ru"
+SCRIPT_VERSION="3.6.1-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -1679,6 +1679,7 @@ iperf_stream_test() {
   IPERF_LAST_NUM="null"
   IPERF_LAST_STR="—"
   IPERF_LAST_STATUS=1
+  IPERF_SERVER_BUSY=false
 
   local stdbuf_cmd=()
   if is_command_available "stdbuf"; then
@@ -1785,6 +1786,10 @@ iperf_stream_test() {
       continue
     fi
 
+    if [[ "$has_server_busy" == "true" ]]; then
+      IPERF_SERVER_BUSY=true
+    fi
+
     if [[ -n "$res_mbps" && "$res_mbps" != "null" ]]; then
       IPERF_LAST_NUM="$res_mbps"
       IPERF_LAST_STR="${res_mbps} Mbps"
@@ -1795,35 +1800,36 @@ iperf_stream_test() {
   done
 }
 
-# Regional test targets: Region | City | Provider | Host | Port
+# Regional test targets: Region | City | Provider | Host | PortRange
 RU_REGIONAL_SERVERS=(
-  "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'5201
-  "Центральный регион"$'\t'"Москва"$'\t'"ЭР-Телеком / Дом.ру"$'\t'"st.msk.ertelecom.ru"$'\t'5201
-  "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'3333
-  "Северо-Западный регион"$'\t'"Санкт-Петербург"$'\t'"ЭР-Телеком"$'\t'"st.spb.ertelecom.ru"$'\t'5201
-  "Приволжский регион"$'\t'"Казань"$'\t'"ЭР-Телеком"$'\t'"st.kzn.ertelecom.ru"$'\t'5201
-  "Приволжский регион"$'\t'"Казань"$'\t'"МТС"$'\t'"kazst.st.mtsws.net"$'\t'3333
-  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ЭР-Телеком"$'\t'"st.nn.ertelecom.ru"$'\t'5201
-  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ТТК"$'\t'"speed-nn.vtt.net"$'\t'5201
-  "Приволжский регион"$'\t'"Самара"$'\t'"ЭР-Телеком"$'\t'"st.samara.ertelecom.ru"$'\t'5201
-  "Южный регион"$'\t'"Ростов-на-Дону"$'\t'"ЭР-Телеком"$'\t'"st.rostov.ertelecom.ru"$'\t'5201
-  "Южный регион"$'\t'"Краснодар"$'\t'"МТС"$'\t'"kndst.st.mtsws.net"$'\t'3333
-  "Южный регион"$'\t'"Волгоград"$'\t'"ТТК"$'\t'"speed-vgd.vtt.net"$'\t'5201
-  "Уральский регион"$'\t'"Екатеринбург"$'\t'"ЭР-Телеком"$'\t'"st.ekat.ertelecom.ru"$'\t'5201
-  "Уральский регион"$'\t'"Тюмень"$'\t'"ЭР-Телеком"$'\t'"st.tmn.ertelecom.ru"$'\t'5201
-  "Уральский регион"$'\t'"Тюмень"$'\t'"МТС"$'\t'"tumst.st.mtsws.net"$'\t'3333
-  "Уральский регион"$'\t'"Челябинск"$'\t'"ЭР-Телеком"$'\t'"st.chel.ertelecom.ru"$'\t'5201
-  "Уральский регион"$'\t'"Пермь"$'\t'"ЭР-Телеком"$'\t'"st.perm.ertelecom.ru"$'\t'5201
-  "Уральский регион"$'\t'"Уфа"$'\t'"ЭР-Телеком"$'\t'"st.ufa.ertelecom.ru"$'\t'5201
-  "Сибирский регион"$'\t'"Новосибирск"$'\t'"ЭР-Телеком"$'\t'"st.nsk.ertelecom.ru"$'\t'5201
-  "Сибирский регион"$'\t'"Красноярск"$'\t'"ЭР-Телеком"$'\t'"st.krsk.ertelecom.ru"$'\t'5201
-  "Сибирский регион"$'\t'"Омск"$'\t'"ЭР-Телеком"$'\t'"st.omsk.ertelecom.ru"$'\t'5201
-  "Дальневосточный регион"$'\t'"Иркутск"$'\t'"ЭР-Телеком"$'\t'"st.irkutsk.ertelecom.ru"$'\t'5201
-  "Дальневосточный регион"$'\t'"Якутск"$'\t'"МТС"$'\t'"yktst.st.mtsws.net"$'\t'3333
+  "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
+  "Центральный регион"$'\t'"Москва"$'\t'"ЭР-Телеком / Дом.ру"$'\t'"st.msk.ertelecom.ru"$'\t'"5201-5209"
+  "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'"3333"
+  "Северо-Западный регион"$'\t'"Санкт-Петербург"$'\t'"ЭР-Телеком"$'\t'"st.spb.ertelecom.ru"$'\t'"5201-5209"
+  "Приволжский регион"$'\t'"Казань"$'\t'"ЭР-Телеком"$'\t'"st.kzn.ertelecom.ru"$'\t'"5201-5209"
+  "Приволжский регион"$'\t'"Казань"$'\t'"МТС"$'\t'"kazst.st.mtsws.net"$'\t'"3333"
+  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ЭР-Телеком"$'\t'"st.nn.ertelecom.ru"$'\t'"5201-5209"
+  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ТТК"$'\t'"speed-nn.vtt.net"$'\t'"5201"
+  "Приволжский регион"$'\t'"Самара"$'\t'"ЭР-Телеком"$'\t'"st.samara.ertelecom.ru"$'\t'"5201-5209"
+  "Южный регион"$'\t'"Ростов-на-Дону"$'\t'"ЭР-Телеком"$'\t'"st.rostov.ertelecom.ru"$'\t'"5201-5209"
+  "Южный регион"$'\t'"Волгоград"$'\t'"ЭР-Телеком"$'\t'"st.volgograd.ertelecom.ru"$'\t'"5201-5209"
+  "Южный регион"$'\t'"Волгоград"$'\t'"ТТК"$'\t'"speed-vgd.vtt.net"$'\t'"5201"
+  "Южный регион"$'\t'"Астрахань"$'\t'"Билайн"$'\t'"astrakhan1.speedtest.corbina.net"$'\t'"5201"
+  "Уральский регион"$'\t'"Екатеринбург"$'\t'"ЭР-Телеком"$'\t'"st.ekat.ertelecom.ru"$'\t'"5201-5209"
+  "Уральский регион"$'\t'"Тюмень"$'\t'"ЭР-Телеком"$'\t'"st.tmn.ertelecom.ru"$'\t'"5201-5209"
+  "Уральский регион"$'\t'"Тюмень"$'\t'"МТС"$'\t'"tumst.st.mtsws.net"$'\t'"3333"
+  "Уральский регион"$'\t'"Челябинск"$'\t'"ЭР-Телеком"$'\t'"st.chel.ertelecom.ru"$'\t'"5201-5209"
+  "Уральский регион"$'\t'"Пермь"$'\t'"ЭР-Телеком"$'\t'"st.perm.ertelecom.ru"$'\t'"5201-5209"
+  "Уральский регион"$'\t'"Уфа"$'\t'"ЭР-Телеком"$'\t'"st.ufa.ertelecom.ru"$'\t'"5201-5209"
+  "Сибирский регион"$'\t'"Новосибирск"$'\t'"ЭР-Телеком"$'\t'"st.nsk.ertelecom.ru"$'\t'"5201-5209"
+  "Сибирский регион"$'\t'"Красноярск"$'\t'"ЭР-Телеком"$'\t'"st.krsk.ertelecom.ru"$'\t'"5201-5209"
+  "Сибирский регион"$'\t'"Омск"$'\t'"ЭР-Телеком"$'\t'"st.omsk.ertelecom.ru"$'\t'"5201-5209"
+  "Дальневосточный регион"$'\t'"Иркутск"$'\t'"ЭР-Телеком"$'\t'"st.irkutsk.ertelecom.ru"$'\t'"5201-5209"
+  "Дальневосточный регион"$'\t'"Якутск"$'\t'"МТС"$'\t'"yktst.st.mtsws.net"$'\t'"3333"
 )
 
 run_region_speed_test() {
-  local region="$1" city="$2" provider="$3" host="$4" port="$5" ping_val="$6"
+  local region="$1" city="$2" provider="$3" host="$4" port_spec="$5" ping_val="$6"
   local label="• ${city} (${provider})"
   local speed="—"
 
@@ -1832,8 +1838,9 @@ run_region_speed_test() {
     ping_num="null"
   fi
 
+  local base_port="${port_spec%%-*}"
   if [[ "$RUN_IPERF" != "true" || -z "$host" ]] || ! is_command_available "iperf3"; then
-    ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$port"$'\t'"$ping_val"$'\t'"$ping_num"$'\t—\tnull\tnull' )
+    ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$base_port"$'\t'"$ping_val"$'\t'"$ping_num"$'\t—\tnull\tnull' )
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "  %s  %s  %s\n" \
         "$(pad_str "$label" 37)" \
@@ -1859,14 +1866,17 @@ run_region_speed_test() {
     fi
   fi
 
-  local ports=("$port")
-  if [[ "$port" -eq 5201 ]]; then
+  local ports=()
+  if [[ "$port_spec" == "5201-5209" ]]; then
     ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
+  else
+    ports=("$port_spec")
   fi
 
   local test_time="${IPERF_TIME:-3}"
   local best_dl="—" best_ul="—"
   local best_dl_num="null" best_ul_num="null"
+  local actual_port="$base_port"
 
   # Initial live state before port scanning
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
@@ -1881,8 +1891,8 @@ run_region_speed_test() {
 
   local port_attempts=0
   for p in "${ports[@]}"; do
-    # Fast TCP pre-check (0.8s) to skip closed or firewalled ports immediately
-    if ! timeout 0.8 bash -c "echo > /dev/tcp/$host/$p" 2>/dev/null; then
+    # Fast TCP pre-check (1.0s) to skip closed or firewalled ports immediately
+    if ! timeout 1.0 bash -c "echo > /dev/tcp/$host/$p" 2>/dev/null; then
       continue
     fi
 
@@ -1890,8 +1900,15 @@ run_region_speed_test() {
 
     # 1. Download (Server -> Client, Reverse mode -R)
     iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+
+    # If single-port host was busy running another test, wait 1.5s and retry once
+    if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" && ${#ports[@]} -eq 1 ]]; then
+      sleep 1.5
+      iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+    fi
+
     if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
-      # Server busy or errored on this port; stop trying if attempt limit reached
+      # If multi-port host has failed 2 active ports, stop scanning further ports
       if (( port_attempts >= 2 )); then
         break
       fi
@@ -1900,6 +1917,7 @@ run_region_speed_test() {
 
     best_dl="$IPERF_LAST_STR"
     best_dl_num="$IPERF_LAST_NUM"
+    actual_port="$p"
 
     # Prepare terminal state for upload before socket-drain pause
     if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
@@ -1917,6 +1935,11 @@ run_region_speed_test() {
 
     # 2. Upload (Client -> Server, Normal mode)
     iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" ]]; then
+      sleep 1.5
+      iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    fi
+
     if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
       best_ul="$IPERF_LAST_STR"
       best_ul_num="$IPERF_LAST_NUM"
@@ -1943,7 +1966,8 @@ run_region_speed_test() {
     speed="Unavailable"
   fi
 
-  ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$port"$'\t'"$ping_val"$'\t'"$ping_num"$'\t'"$speed"$'\t'"$best_dl_num"$'\t'"$best_ul_num" )
+  local port_num="${actual_port:-$base_port}"
+  ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$port_num"$'\t'"$ping_val"$'\t'"$ping_num"$'\t'"$speed"$'\t'"$best_dl_num"$'\t'"$best_ul_num" )
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if [[ -t 1 ]]; then
@@ -1984,7 +2008,7 @@ measure_ru_iperf() {
   fi
 
   for srv_entry in "${RU_REGIONAL_SERVERS[@]}"; do
-    IFS=$'\t' read -r region city provider host port <<<"$srv_entry"
+    IFS=$'\t' read -r region city provider host port_spec <<<"$srv_entry"
 
     if [[ "$JSON_OUTPUT" != "true" && "$region" != "$current_region" ]]; then
       if [[ -n "$current_region" ]]; then
@@ -2003,7 +2027,7 @@ measure_ru_iperf() {
       ping_val=$(read_val "$p_dir/$host" "N/A")
     fi
 
-    run_region_speed_test "$region" "$city" "$provider" "$host" "$port" "$ping_val"
+    run_region_speed_test "$region" "$city" "$provider" "$host" "$port_spec" "$ping_val"
   done
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
