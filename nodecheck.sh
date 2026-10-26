@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.6.1-ru"
+SCRIPT_VERSION="3.7.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -54,6 +54,15 @@ NODE_RKN_COLOR="0;90"
 NODE_BBR_STATUS=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
+NODE_UPLINK_STATUS=""
+NODE_UPLINK_TARGET=""
+NODE_UPLINK_HOST=""
+NODE_UPLINK_PING="N/A"
+NODE_UPLINK_PING_NUM="null"
+NODE_UPLINK_DL="null"
+NODE_UPLINK_UL="null"
+SAVED_STTY=""
+IPERF_SKIPPED=false
 
 NODE_CPU_MODEL=""
 NODE_CPU_CORES=1
@@ -248,7 +257,7 @@ format_value() {
     "No"*|*"Captcha"*|*"Blocked"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*)
       color "$COLOR_DANGER" "$val"
       ;;
-    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*)
+    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
       color "$COLOR_WARN" "$val"
       ;;
     *"ms")
@@ -311,6 +320,9 @@ error_exit() {
 cleanup() {
   trap - EXIT INT TERM
   progress_clear
+  if [[ -n "$SAVED_STTY" && -r /dev/tty ]]; then
+    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || true
+  fi
   local pids
   pids=$(jobs -p 2>/dev/null)
   if [[ -n "$pids" ]]; then
@@ -1723,64 +1735,149 @@ iperf_stream_test() {
       stream_args+=("-P" "$active_streams")
     fi
 
-    while IFS= read -r line; do
-      if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
-        has_stream_error=true
-      fi
-      if [[ "$line" == *"busy running a test"* ]]; then
-        has_server_busy=true
-      fi
-      if [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]]; then
-        has_conn_error=true
-      fi
+    local raw_out="$TMP_WORK_DIR/iperf_raw.log"
+    : > "$raw_out"
 
-      # Filter lines: only [SUM] for multi-stream, or [ ID] / [SUM] for single-stream
-      if (( active_streams > 1 )); then
-        [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+    timeout $((test_time + 4)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 > "$raw_out" 2>&1 &
+    local iperf_pid=$!
+    local start_sec=$SECONDS
+    local last_line=0
+
+    while kill -0 "$iperf_pid" 2>/dev/null; do
+      # 1. Non-blocking keypress check (<Enter>, Space, 's')
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+        local user_key=""
+        if read -t 0.15 -n 1 user_key < /dev/tty 2>/dev/null; then
+          if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
+            IPERF_SKIPPED=true
+            kill -TERM "$iperf_pid" 2>/dev/null || true
+            pkill -KILL -P "$iperf_pid" 2>/dev/null || true
+            kill -KILL "$iperf_pid" 2>/dev/null || true
+            wait "$iperf_pid" 2>/dev/null || true
+            break
+          fi
+        fi
       else
-        [[ "$line" =~ ^[[:space:]]*\[[[:space:]]*[0-9]+\] || "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+        sleep 0.15
       fi
 
-      # Match speed and unit
-      if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+([a-zA-Z]+bits/sec|[a-zA-Z]+Bytes/sec) ]]; then
-        local val="${BASH_REMATCH[1]}"
-        local unit="${BASH_REMATCH[3]}"
-        local mbps
-        mbps=$(convert_to_mbps "$val" "$unit")
-        [[ "$mbps" == "null" || -z "$mbps" ]] && continue
+      # 2. Check for new output lines
+      local total_lines=0
+      total_lines=$(wc -l < "$raw_out" 2>/dev/null || echo 0)
+      if (( total_lines > last_line )); then
+        while IFS= read -r line; do
+          if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
+            has_stream_error=true
+          fi
+          if [[ "$line" == *"busy running a test"* ]]; then
+            has_server_busy=true
+          fi
+          if [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]]; then
+            has_conn_error=true
+          fi
 
-        if [[ "$line" == *"receiver"* ]]; then
-          final_recv="$mbps"
-        elif [[ "$line" == *"sender"* ]]; then
-          final_send="$mbps"
-        else
-          last_interval="$mbps"
-          if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-            if [[ -n "$COLOR_TABLE_VALUE" ]]; then
-              if [[ "$mode" == "DL" ]]; then
-                printf "\r\033[2K  %s  %s  \033[%sm↓ %s Mbps...\033[0m\r" \
-                  "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$mbps"
-              else
-                printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ %s Mbps...\033[0m\r" \
-                  "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
-              fi
+          if (( active_streams > 1 )); then
+            [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+          else
+            [[ "$line" =~ ^[[:space:]]*\[[[:space:]]*[0-9]+\] || "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+          fi
+
+          if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+([a-zA-Z]+bits/sec|[a-zA-Z]+Bytes/sec) ]]; then
+            local val="${BASH_REMATCH[1]}"
+            local unit="${BASH_REMATCH[3]}"
+            local mbps
+            mbps=$(convert_to_mbps "$val" "$unit")
+            [[ "$mbps" == "null" || -z "$mbps" ]] && continue
+
+            if [[ "$line" == *"receiver"* ]]; then
+              final_recv="$mbps"
+            elif [[ "$line" == *"sender"* ]]; then
+              final_send="$mbps"
             else
-              if [[ "$mode" == "DL" ]]; then
-                printf "\r\033[2K  %s  %s  ↓ %s Mbps...\r" \
-                  "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$mbps"
-              else
-                printf "\r\033[2K  %s  %s  ↓ %s / ↑ %s Mbps...\r" \
-                  "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$dl_speed_for_ul" "$mbps"
+              last_interval="$mbps"
+              if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+                if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+                  if [[ "$mode" == "DL" ]]; then
+                    printf "\r\033[2K  %s  %s  \033[%sm↓ %s Mbps...\033[0m\r" \
+                      "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$mbps"
+                  else
+                    printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ %s Mbps...\033[0m\r" \
+                      "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
+                  fi
+                else
+                  if [[ "$mode" == "DL" ]]; then
+                    printf "\r\033[2K  %s  %s  ↓ %s Mbps...\r" \
+                      "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$mbps"
+                  else
+                    printf "\r\033[2K  %s  %s  ↓ %s / ↑ %s Mbps...\r" \
+                      "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$dl_speed_for_ul" "$mbps"
+                  fi
+                fi
               fi
             fi
           fi
-        fi
+        done < <(sed -n "$((last_line + 1)),${total_lines}p" "$raw_out" 2>/dev/null)
+        last_line=$total_lines
       fi
-    done < <(timeout $((test_time + 3)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 2>&1)
+
+      # 3. Watchdog timeout
+      if (( SECONDS - start_sec > test_time + 4 )); then
+        kill -TERM "$iperf_pid" 2>/dev/null || true
+        pkill -KILL -P "$iperf_pid" 2>/dev/null || true
+        kill -KILL "$iperf_pid" 2>/dev/null || true
+        wait "$iperf_pid" 2>/dev/null || true
+        break
+      fi
+    done
+
+    wait "$iperf_pid" 2>/dev/null || true
+
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      IPERF_LAST_STR="Skipped"
+      IPERF_LAST_NUM="null"
+      IPERF_LAST_STATUS=2
+      break
+    fi
+
+    local final_total=0
+    final_total=$(wc -l < "$raw_out" 2>/dev/null || echo 0)
+    if (( final_total > last_line )); then
+      while IFS= read -r line; do
+        if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
+          has_stream_error=true
+        fi
+        if [[ "$line" == *"busy running a test"* ]]; then
+          has_server_busy=true
+        fi
+        if [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]]; then
+          has_conn_error=true
+        fi
+
+        if (( active_streams > 1 )); then
+          [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+        else
+          [[ "$line" =~ ^[[:space:]]*\[[[:space:]]*[0-9]+\] || "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+        fi
+
+        if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+([a-zA-Z]+bits/sec|[a-zA-Z]+Bytes/sec) ]]; then
+          local val="${BASH_REMATCH[1]}"
+          local unit="${BASH_REMATCH[3]}"
+          local mbps
+          mbps=$(convert_to_mbps "$val" "$unit")
+          [[ "$mbps" == "null" || -z "$mbps" ]] && continue
+          if [[ "$line" == *"receiver"* ]]; then
+            final_recv="$mbps"
+          elif [[ "$line" == *"sender"* ]]; then
+            final_send="$mbps"
+          else
+            last_interval="$mbps"
+          fi
+        fi
+      done < <(sed -n "$((last_line + 1)),${final_total}p" "$raw_out" 2>/dev/null)
+    fi
 
     local res_mbps="${final_recv:-${final_send:-$last_interval}}"
 
-    # If parallel streams failed due to server stream limits, retry once with 1 stream
     if (( active_streams > 1 )) && [[ "$has_stream_error" == "true" || ( -z "$res_mbps" && "$has_server_busy" != "true" && "$has_conn_error" != "true" ) ]]; then
       active_streams=1
       continue
@@ -1802,6 +1899,9 @@ iperf_stream_test() {
 
 # Regional test targets: Region | City | Provider | Host | PortRange
 RU_REGIONAL_SERVERS=(
+  "Европа / Международные хабы"$'\t'"Амстердам"$'\t'"Clouvider / AMS-IX"$'\t'"ams.speedtest.clouvider.net"$'\t'"5200-5209"
+  "Европа / Международные хабы"$'\t'"Франкфурт"$'\t'"Clouvider / DE-CIX"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
+  "Европа / Международные хабы"$'\t'"Лондон"$'\t'"Clouvider / LINX"$'\t'"lon.speedtest.clouvider.net"$'\t'"5200-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"ЭР-Телеком / Дом.ру"$'\t'"st.msk.ertelecom.ru"$'\t'"5201-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'"3333"
@@ -1850,6 +1950,11 @@ run_region_speed_test() {
     return
   fi
 
+  # Drain pending keystrokes before starting this server test
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+    while read -t 0.01 -n 1000 _ < /dev/tty 2>/dev/null; do :; done
+  fi
+
   local iperf_ver_flag=()
   if [[ "$IPV4_ONLY" == "true" ]]; then
     iperf_ver_flag+=(-4)
@@ -1867,7 +1972,9 @@ run_region_speed_test() {
   fi
 
   local ports=()
-  if [[ "$port_spec" == "5201-5209" ]]; then
+  if [[ "$port_spec" == "5200-5209" ]]; then
+    ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
+  elif [[ "$port_spec" == "5201-5209" ]]; then
     ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
   else
     ports=("$port_spec")
@@ -1877,6 +1984,7 @@ run_region_speed_test() {
   local best_dl="—" best_ul="—"
   local best_dl_num="null" best_ul_num="null"
   local actual_port="$base_port"
+  IPERF_SKIPPED=false
 
   # Initial live state before port scanning
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
@@ -1891,6 +1999,17 @@ run_region_speed_test() {
 
   local port_attempts=0
   for p in "${ports[@]}"; do
+    # Check if user pressed skip before TCP probe
+    if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+      local user_key=""
+      if read -t 0.05 -n 1 user_key < /dev/tty 2>/dev/null; then
+        if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
+          IPERF_SKIPPED=true
+          break
+        fi
+      fi
+    fi
+
     # Fast TCP pre-check (1.0s) to skip closed or firewalled ports immediately
     if ! timeout 1.0 bash -c "echo > /dev/tcp/$host/$p" 2>/dev/null; then
       continue
@@ -1900,11 +2019,17 @@ run_region_speed_test() {
 
     # 1. Download (Server -> Client, Reverse mode -R)
     iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      break
+    fi
 
     # If single-port host was busy running another test, wait 1.5s and retry once
     if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" && ${#ports[@]} -eq 1 ]]; then
       sleep 1.5
       iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+      if [[ "$IPERF_SKIPPED" == "true" ]]; then
+        break
+      fi
     fi
 
     if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
@@ -1930,14 +2055,39 @@ run_region_speed_test() {
       fi
     fi
 
-    # Delay 1s to allow remote server daemon to cleanly release worker socket before Upload
-    sleep 1
+    # Delay 1s with interactive keypress monitoring before Upload
+    for ((s=0; s<10; s++)); do
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+        local user_key=""
+        if read -t 0.1 -n 1 user_key < /dev/tty 2>/dev/null; then
+          if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
+            IPERF_SKIPPED=true
+            break
+          fi
+        fi
+      else
+        sleep 0.1
+      fi
+    done
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      best_ul="Skipped"
+      break
+    fi
 
     # 2. Upload (Client -> Server, Normal mode)
     iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      best_ul="Skipped"
+      break
+    fi
+
     if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" ]]; then
       sleep 1.5
       iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+      if [[ "$IPERF_SKIPPED" == "true" ]]; then
+        best_ul="Skipped"
+        break
+      fi
     fi
 
     if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
@@ -1952,7 +2102,13 @@ run_region_speed_test() {
     break
   done
 
-  if [[ "$best_dl" != "—" || "$best_ul" != "—" ]]; then
+  if [[ "$IPERF_SKIPPED" == "true" ]]; then
+    if [[ "$best_dl" != "—" && "$best_dl" != "Skipped" ]]; then
+      speed="↓ $best_dl / ↑ Skipped"
+    else
+      speed="Skipped"
+    fi
+  elif [[ "$best_dl" != "—" || "$best_ul" != "—" ]]; then
     if [[ "$best_ul" == "Blocked" ]]; then
       speed="↓ $best_dl / ↑ Blocked"
     elif [[ "$best_dl" != "—" && "$best_ul" != "—" ]]; then
@@ -2004,7 +2160,13 @@ measure_ru_iperf() {
   local current_region=""
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
-    bold "4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)"; printf "\n\n"
+    bold "4. ⚡️ Связность и скорость каналов связи (Enter — пропустить узел)"; printf "\n\n"
+  fi
+
+  # Enable non-canonical mode if interactive terminal
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
+    SAVED_STTY=$(stty -g < /dev/tty 2>/dev/null || echo "")
+    stty -icanon -echo < /dev/tty 2>/dev/null || true
   fi
 
   for srv_entry in "${RU_REGIONAL_SERVERS[@]}"; do
@@ -2030,6 +2192,12 @@ measure_ru_iperf() {
     run_region_speed_test "$region" "$city" "$provider" "$host" "$port_spec" "$ping_val"
   done
 
+  # Restore terminal stty settings
+  if [[ -n "$SAVED_STTY" && -r /dev/tty ]]; then
+    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || true
+    SAVED_STTY=""
+  fi
+
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if ! is_command_available "iperf3"; then
       printf "\n"
@@ -2041,6 +2209,188 @@ measure_ru_iperf() {
     fi
     printf "\n"
   fi
+}
+
+get_local_datacenter_target() {
+  local cc="${NODE_COUNTRY_CODE^^}"
+  case "$cc" in
+    "DE")
+      echo "Frankfurt, Clouvider 10G"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
+      ;;
+    "NL")
+      echo "Amsterdam, Clouvider 10G"$'\t'"ams.speedtest.clouvider.net"$'\t'"5200-5209"
+      ;;
+    "GB"|"UK")
+      echo "London, Clouvider 10G"$'\t'"lon.speedtest.clouvider.net"$'\t'"5200-5209"
+      ;;
+    "RU")
+      echo "Moscow, Hostkey 10G"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
+      ;;
+    "US")
+      echo "New York, Clouvider 10G"$'\t'"nyc.speedtest.clouvider.net"$'\t'"5200-5209"
+      ;;
+    "FR")
+      echo "Paris, Testdebit 10G"$'\t'"paris.testdebit.info"$'\t'"5200-5209"
+      ;;
+    "FI"|"SE"|"NO"|"DK"|"EE"|"LV"|"LT"|"PL"|"AT"|"CH"|"CZ"|"BE")
+      echo "Frankfurt, Clouvider 10G"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
+      ;;
+    *)
+      echo "Frankfurt, Clouvider 10G"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
+      ;;
+  esac
+}
+
+measure_local_uplink() {
+  local target_info
+  target_info=$(get_local_datacenter_target)
+  local dc_name dc_host dc_port_spec
+  IFS=$'\t' read -r dc_name dc_host dc_port_spec <<<"$target_info"
+
+  NODE_UPLINK_TARGET="$dc_name"
+  NODE_UPLINK_HOST="$dc_host"
+  NODE_UPLINK_PING="N/A"
+  NODE_UPLINK_PING_NUM="null"
+  NODE_UPLINK_DL="null"
+  NODE_UPLINK_UL="null"
+  NODE_UPLINK_STATUS=""
+
+  local p_file="$TMP_WORK_DIR/local_uplink_ping.txt"
+  ping_host "$dc_host" "$p_file"
+  local ping_val="N/A"
+  if [[ -f "$p_file" ]]; then
+    ping_val=$(read_val "$p_file" "N/A")
+  fi
+  NODE_UPLINK_PING="$ping_val"
+  local ping_num="${ping_val%% ms*}"
+  if [[ "$ping_num" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    NODE_UPLINK_PING_NUM="$ping_num"
+  fi
+
+  if [[ "$RUN_IPERF" != "true" ]] || ! is_command_available "iperf3"; then
+    NODE_UPLINK_STATUS="$ping_val ($dc_name)"
+    return
+  fi
+
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
+    SAVED_STTY=$(stty -g < /dev/tty 2>/dev/null || echo "")
+    stty -icanon -echo < /dev/tty 2>/dev/null || true
+  fi
+
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+    while read -t 0.01 -n 1000 _ < /dev/tty 2>/dev/null; do :; done
+  fi
+
+  local ports=()
+  if [[ "$dc_port_spec" == "5200-5209" ]]; then
+    ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
+  elif [[ "$dc_port_spec" == "5201-5209" ]]; then
+    ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
+  else
+    ports=("$dc_port_spec")
+  fi
+
+  local test_time=2
+  local streams="$IPERF_STREAMS"
+  if [[ -z "$streams" ]]; then
+    if (( NODE_CPU_CORES >= 2 )); then
+      streams=4
+    else
+      streams=2
+    fi
+  fi
+
+  local best_dl="—" best_ul="—"
+  local best_dl_num="null" best_ul_num="null"
+  IPERF_SKIPPED=false
+  local label="• Local Uplink (${dc_name})"
+
+  for p in "${ports[@]}"; do
+    if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+      local user_key=""
+      if read -t 0.05 -n 1 user_key < /dev/tty 2>/dev/null; then
+        if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
+          IPERF_SKIPPED=true
+          break
+        fi
+      fi
+    fi
+
+    if ! timeout 1.0 bash -c "echo > /dev/tcp/$dc_host/$p" 2>/dev/null; then
+      continue
+    fi
+
+    # 1. Download
+    iperf_stream_test "$dc_host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      break
+    fi
+
+    if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
+      continue
+    fi
+
+    best_dl="$IPERF_LAST_STR"
+    best_dl_num="$IPERF_LAST_NUM"
+
+    for ((s=0; s<5; s++)); do
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+        local user_key=""
+        if read -t 0.1 -n 1 user_key < /dev/tty 2>/dev/null; then
+          if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
+            IPERF_SKIPPED=true
+            break
+          fi
+        fi
+      else
+        sleep 0.1
+      fi
+    done
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      best_ul="Skipped"
+      break
+    fi
+
+    # 2. Upload
+    iperf_stream_test "$dc_host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      best_ul="Skipped"
+      break
+    fi
+
+    if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
+      best_ul="$IPERF_LAST_STR"
+      best_ul_num="$IPERF_LAST_NUM"
+    fi
+    break
+  done
+
+  # Clear live streaming indicator before printing header
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+    printf "\r\033[2K\r"
+  fi
+
+  if [[ -n "$SAVED_STTY" && -r /dev/tty ]]; then
+    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || true
+    SAVED_STTY=""
+  fi
+
+  if [[ "$IPERF_SKIPPED" == "true" ]]; then
+    if [[ "$best_dl" != "—" && "$best_dl" != "Skipped" ]]; then
+      NODE_UPLINK_STATUS="$ping_val | ↓ $best_dl / ↑ Skipped ($dc_name)"
+    else
+      NODE_UPLINK_STATUS="$ping_val | Skipped ($dc_name)"
+    fi
+  elif [[ "$best_dl" != "—" && "$best_ul" != "—" ]]; then
+    NODE_UPLINK_STATUS="$ping_val | ↓ $best_dl / ↑ $best_ul ($dc_name)"
+  elif [[ "$best_dl" != "—" ]]; then
+    NODE_UPLINK_STATUS="$ping_val | ↓ $best_dl ($dc_name)"
+  else
+    NODE_UPLINK_STATUS="$ping_val ($dc_name)"
+  fi
+
+  NODE_UPLINK_DL="$best_dl_num"
+  NODE_UPLINK_UL="$best_ul_num"
 }
 
 # ------------------------------------------------------------------------------
@@ -2102,6 +2452,9 @@ print_header() {
     echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
+    if [[ -n "$NODE_UPLINK_STATUS" ]]; then
+      echo -e " Аплинк (Local DC):\t$(format_value "$NODE_UPLINK_STATUS")"
+    fi
   } | format_table
   if [[ -n "$COLOR_INFO" ]]; then
     printf "\033[%sm%s\033[0m\n\n" "$COLOR_INFO" "$line_sep"
@@ -2257,6 +2610,10 @@ build_json() {
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
+    --arg uplink_target "${NODE_UPLINK_TARGET:-}" \
+    --arg uplink_ping "${NODE_UPLINK_PING_NUM:-null}" \
+    --arg uplink_dl "${NODE_UPLINK_DL:-null}" \
+    --arg uplink_ul "${NODE_UPLINK_UL:-null}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
     --arg geoip_raw "$geoip_lines" \
@@ -2279,7 +2636,17 @@ build_json() {
       },
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
-      network: { bbr: $bbr, udp: $udp, port25: $port25 },
+      network: {
+        bbr: $bbr,
+        udp: $udp,
+        port25: $port25,
+        local_uplink: {
+          target: (if $uplink_target != "" then $uplink_target else null end),
+          latency_ms: (if $uplink_ping != "" and $uplink_ping != "null" and $uplink_ping != "N/A" then ($uplink_ping | try tonumber catch null) else null end),
+          download_mbps: (if $uplink_dl != "" and $uplink_dl != "null" then ($uplink_dl | try tonumber catch null) else null end),
+          upload_mbps: (if $uplink_ul != "" and $uplink_ul != "null" then ($uplink_ul | try tonumber catch null) else null end)
+        }
+      },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
       geoip_consensus: (
         [$geoip_raw | split("\n")[] | select(length > 0) | split("\t")]
@@ -2319,6 +2686,10 @@ display_help() {
 Использование: nodecheck.sh [ОПЦИИ]
 
 NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит серверных нод и сетевого стека под РФ
+(Аплинк ноды, международные европейские хабы AMS-IX/DE-CIX/LINX и 7 регионов РФ)
+
+Управление:
+  <Enter> / Пробел         Мгновенно пропустить текущий узел при замере скорости iPerf3
 
 Опции:
   -h, --help               Показать эту справку и выйти
@@ -2481,6 +2852,11 @@ main() {
   get_system_specs
   progress_clear
 
+  # Local Datacenter Uplink capacity check
+  progress_status "Замер аплинк-канала ноды (Local Datacenter)"
+  measure_local_uplink
+  progress_clear
+
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_header
   fi
@@ -2505,7 +2881,7 @@ main() {
   fi
 
   # 4. Multi-Region Pings & Speedtest
-  progress_status "Замер задержки RTT по регионам РФ"
+  progress_status "Замер задержки RTT (Европа и регионы РФ)"
   measure_ru_pings
   progress_clear
 
