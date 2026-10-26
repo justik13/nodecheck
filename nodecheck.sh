@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.5.3
+# NodeCheck (RU Edition) v3.5.4
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.5.3-ru"
+SCRIPT_VERSION="3.5.4-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -1654,6 +1654,155 @@ ping_host() {
   fi
 }
 
+convert_to_mbps() {
+  local val="$1" unit="$2"
+  awk -v val="$val" -v unit="$unit" 'BEGIN {
+    mbps = 0;
+    if (unit ~ /^[Gg]bits/) mbps = val * 1000;
+    else if (unit ~ /^[Mm]bits/) mbps = val;
+    else if (unit ~ /^[Kk]bits/) mbps = val / 1000;
+    else if (unit ~ /^bits/) mbps = val / 1000000;
+    else if (unit ~ /^[Gg]Bytes/) mbps = val * 8000;
+    else if (unit ~ /^[Mm]Bytes/) mbps = val * 8;
+    else if (unit ~ /^[Kk]Bytes/) mbps = val * 8 / 1000;
+    else if (unit ~ /^Bytes/) mbps = val * 8 / 1000000;
+
+    if (mbps >= 10) printf "%d", mbps + 0.5;
+    else if (mbps >= 0.05) printf "%.1f", mbps;
+    else if (mbps > 0) printf "0.1";
+    else printf "null";
+  }'
+}
+
+iperf_stream_test() {
+  local target_host="$1"
+  local target_port="$2"
+  local mode="$3"          # "DL" or "UL"
+  local test_time="$4"
+  local streams="$5"
+  local label="$6"
+  local ping_val="$7"
+  local dl_speed_for_ul="${8:-}"
+
+  IPERF_LAST_NUM="null"
+  IPERF_LAST_STR="—"
+  IPERF_LAST_STATUS=1
+
+  local stdbuf_cmd=()
+  if is_command_available "stdbuf"; then
+    stdbuf_cmd=("stdbuf" "-oL" "-eL")
+  fi
+
+  local mode_args=()
+  if [[ "$mode" == "DL" ]]; then
+    mode_args+=("-R")
+  fi
+
+  local active_streams="$streams"
+
+  while :; do
+    local final_recv="" final_send="" last_interval=""
+    local has_stream_error=false has_server_busy=false has_conn_error=false
+
+    # Show initial live indicator before data begins streaming
+    if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+      if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+        if [[ "$mode" == "DL" ]]; then
+          printf "\r\033[2K  %s  %s  \033[%sm↓ ...\033[0m\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE"
+        else
+          printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ ...\033[0m\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul"
+        fi
+      else
+        if [[ "$mode" == "DL" ]]; then
+          printf "\r\033[2K  %s  %s  ↓ ...\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)"
+        else
+          printf "\r\033[2K  %s  %s  ↓ %s / ↑ ...\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$dl_speed_for_ul"
+        fi
+      fi
+    fi
+
+    local stream_args=()
+    if (( active_streams > 1 )); then
+      stream_args+=("-P" "$active_streams")
+    fi
+
+    while IFS= read -r line; do
+      if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
+        has_stream_error=true
+      fi
+      if [[ "$line" == *"busy running a test"* ]]; then
+        has_server_busy=true
+      fi
+      if [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]]; then
+        has_conn_error=true
+      fi
+
+      # Filter lines: only [SUM] for multi-stream, or [ ID] / [SUM] for single-stream
+      if (( active_streams > 1 )); then
+        [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+      else
+        [[ "$line" =~ ^[[:space:]]*\[[[:space:]]*[0-9]+\] || "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+      fi
+
+      # Match speed and unit
+      if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+([a-zA-Z]+bits/sec|[a-zA-Z]+Bytes/sec) ]]; then
+        local val="${BASH_REMATCH[1]}"
+        local unit="${BASH_REMATCH[3]}"
+        local mbps
+        mbps=$(convert_to_mbps "$val" "$unit")
+        [[ "$mbps" == "null" || -z "$mbps" ]] && continue
+
+        if [[ "$line" == *"receiver"* ]]; then
+          final_recv="$mbps"
+        elif [[ "$line" == *"sender"* ]]; then
+          final_send="$mbps"
+        else
+          last_interval="$mbps"
+          if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+            if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+              if [[ "$mode" == "DL" ]]; then
+                printf "\r\033[2K  %s  %s  \033[%sm↓ %s Mbps...\033[0m\r" \
+                  "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$mbps"
+              else
+                printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ %s Mbps...\033[0m\r" \
+                  "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
+              fi
+            else
+              if [[ "$mode" == "DL" ]]; then
+                printf "\r\033[2K  %s  %s  ↓ %s Mbps...\r" \
+                  "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$mbps"
+              else
+                printf "\r\033[2K  %s  %s  ↓ %s / ↑ %s Mbps...\r" \
+                  "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$dl_speed_for_ul" "$mbps"
+              fi
+            fi
+          fi
+        fi
+      fi
+    done < <(timeout $((test_time + 3)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 2>&1)
+
+    local res_mbps="${final_recv:-${final_send:-$last_interval}}"
+
+    # If parallel streams failed due to server stream limits, retry once with 1 stream
+    if (( active_streams > 1 )) && [[ "$has_stream_error" == "true" || ( -z "$res_mbps" && "$has_server_busy" != "true" && "$has_conn_error" != "true" ) ]]; then
+      active_streams=1
+      continue
+    fi
+
+    if [[ -n "$res_mbps" && "$res_mbps" != "null" ]]; then
+      IPERF_LAST_NUM="$res_mbps"
+      IPERF_LAST_STR="${res_mbps} Mbps"
+      IPERF_LAST_STATUS=0
+    fi
+
+    break
+  done
+}
+
 run_region_speed_test() {
   local label="$1" ping_val="$2" host="$3" fallback_host="${4:-}"
   local speed="—"
@@ -1700,14 +1849,14 @@ run_region_speed_test() {
   local best_dl="—" best_ul="—"
   local best_dl_num="null" best_ul_num="null"
 
-  # Initial live progress before port scanning so terminal is never left frozen
+  # Initial live state before port scanning
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-    if [[ -n "$COLOR_WARN" ]]; then
-      printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
-        "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_WARN" "$test_time"
+    if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+      printf "\r\033[2K  %s  %s  \033[%sm↓ ...\033[0m\r" \
+        "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE"
     else
-      printf "\r\033[2K  %s  %s  * Замер DL (%ss)...\r" \
-        "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
+      printf "\r\033[2K  %s  %s  ↓ ...\r" \
+        "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)"
     fi
   fi
 
@@ -1722,13 +1871,8 @@ run_region_speed_test() {
       ((port_attempts++))
 
       # 1. Download (Server -> Client, Reverse mode -R)
-      local res_dl dl_bps dl="—" dl_num="null"
-      res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -P "$streams" -J 2>/dev/null || echo "")
-      if (( streams > 1 )) && [[ "$res_dl" == *"error"* ]] && [[ "$res_dl" == *"unable to create a new stream"* || "$res_dl" == *"parallel"* ]]; then
-        res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -J 2>/dev/null || echo "")
-      fi
-
-      if [[ -z "$res_dl" || "$res_dl" == *"error"* ]]; then
+      iperf_stream_test "$cur_host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+      if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
         # Server busy or errored on this port; stop trying if attempt limit reached
         if (( port_attempts >= 2 )); then
           break
@@ -1736,43 +1880,28 @@ run_region_speed_test() {
         continue
       fi
 
-      dl_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_dl" 2>/dev/null || echo 0)
-      if (( $(awk -v a="$dl_bps" 'BEGIN { print (a > 100000) ? 1 : 0 }') )); then
-        dl_num=$(awk -v b="$dl_bps" 'BEGIN { if (b >= 10000000) printf "%d", (b/1000000)+0.5; else printf "%.1f", b/1000000 }')
-        dl="${dl_num} Mbps"
-      fi
+      best_dl="$IPERF_LAST_STR"
+      best_dl_num="$IPERF_LAST_NUM"
 
-      best_dl="$dl"
-      best_dl_num="$dl_num"
+      # Prepare terminal state for upload before the 1s socket-drain pause
+      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+        if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+          printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ ...\033[0m\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_TABLE_VALUE" "$best_dl"
+        else
+          printf "\r\033[2K  %s  %s  ↓ %s / ↑ ...\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$best_dl"
+        fi
+      fi
 
       # Delay 1s to allow remote server daemon to cleanly release worker socket before Upload
       sleep 1
 
       # 2. Upload (Client -> Server, Normal mode)
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        if [[ -n "$COLOR_WARN" ]]; then
-          printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер UL (%ss)...\033[0m\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$(format_value "$ping_val")" 14)" "$COLOR_WARN" "$test_time"
-        else
-          printf "\r\033[2K  %s  %s  * Замер UL (%ss)...\r" \
-            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
-        fi
-      fi
-
-      local res_ul ul_bps ul="—" ul_num="null"
-      res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -P "$streams" -J 2>/dev/null || echo "")
-      if (( streams > 1 )) && [[ "$res_ul" == *"error"* ]] && [[ "$res_ul" == *"unable to create a new stream"* || "$res_ul" == *"parallel"* ]]; then
-        res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -J 2>/dev/null || echo "")
-      fi
-
-      if [[ -n "$res_ul" && "$res_ul" != *"error"* ]]; then
-        ul_bps=$(jq -r '.end.sum_received.bits_per_second // .end.sum_sent.bits_per_second // 0' <<<"$res_ul" 2>/dev/null || echo 0)
-        if (( $(awk -v a="$ul_bps" 'BEGIN { print (a > 100000) ? 1 : 0 }') )); then
-          ul_num=$(awk -v b="$ul_bps" 'BEGIN { if (b >= 10000000) printf "%d", (b/1000000)+0.5; else printf "%.1f", b/1000000 }')
-          ul="${ul_num} Mbps"
-        fi
-        best_ul="$ul"
-        best_ul_num="$ul_num"
+      iperf_stream_test "$cur_host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+      if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
+        best_ul="$IPERF_LAST_STR"
+        best_ul_num="$IPERF_LAST_NUM"
       else
         best_ul="Blocked / Error"
         best_ul_num="null"
