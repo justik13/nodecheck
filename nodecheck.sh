@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.5.1-ru"
+SCRIPT_VERSION="3.5.2-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -28,11 +28,12 @@ PROXY_ADDR=""
 INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
 RUN_IPERF=true
-RUN_IPERF_ALL=false
+RUN_IPERF_ALL=true
 RUN_FULL_IPERF=false
-IPERF_TIME=5
+IPERF_TIME=3
 IPERF_TIME_DL="$IPERF_TIME"
 IPERF_TIME_UL="$IPERF_TIME"
+IPERF_STREAMS=""
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -819,6 +820,9 @@ get_system_specs() {
   fi
   NODE_CPU_MODEL="$cpu_model"
   NODE_CPU_CORES=$(grep -c "^processor" /proc/cpuinfo 2>/dev/null || echo "1")
+  if [[ ! "$NODE_CPU_CORES" =~ ^[1-9][0-9]*$ ]]; then
+    NODE_CPU_CORES=1
+  fi
 
   # 2. Virtualization & Uptime
   if [[ -f /.dockerenv ]]; then
@@ -1663,7 +1667,7 @@ run_region_speed_test() {
     ARR_CONNECTIVITY+=( "$label"$'\t'"$ping_val"$'\t'"—"$'\t'"$ping_num"$'\tnull\tnull' )
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "  %s  %s  %s\n" \
-        "$(pad_str "$label" 38)" \
+        "$(pad_str "$label" 35)" \
         "$(pad_str "$(format_value "$ping_val")" 14)" \
         "$(format_value "—")"
     fi
@@ -1677,13 +1681,22 @@ run_region_speed_test() {
     iperf_ver_flag+=(-6)
   fi
 
+  local streams="$IPERF_STREAMS"
+  if [[ -z "$streams" ]]; then
+    if (( NODE_CPU_CORES >= 2 )); then
+      streams=4
+    else
+      streams=2
+    fi
+  fi
+
   local ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
   local target_hosts=("$host")
   if [[ -n "$fallback_host" && "$fallback_host" != "$host" ]]; then
     target_hosts+=("$fallback_host")
   fi
 
-  local test_time="${IPERF_TIME:-5}"
+  local test_time="${IPERF_TIME:-3}"
   local best_dl="—" best_ul="—" best_note=""
   local best_dl_num="null" best_ul_num="null"
 
@@ -1700,23 +1713,23 @@ run_region_speed_test() {
       # 1. Download (Server -> Client, Reverse mode -R)
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
         if [[ -n "$COLOR_WARN" ]]; then
-          printf "  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time"
+          printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер DL (%ss)...\033[0m\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time"
         else
-          printf "  %s  %s  * Замер DL (%ss)...\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$test_time"
+          printf "\r%79s\r  %s  %s  * Замер DL (%ss)...\r" "" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
         fi
       fi
 
       local res_dl dl_bps dl="—" dl_num="null"
-      res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -P 2 -J 2>/dev/null || echo "")
-      if [[ "$res_dl" == *"stream"* || "$res_dl" == *"parallel"* ]]; then
+      res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -P "$streams" -J 2>/dev/null || echo "")
+      if [[ "$res_dl" == *"stream"* || "$res_dl" == *"parallel"* || "$res_dl" == *"unable to create a new stream"* ]]; then
         res_dl=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -R -t "$test_time" -J 2>/dev/null || echo "")
       fi
 
       if [[ -z "$res_dl" || "$res_dl" == *"error"* ]]; then
         # Server busy or errored on this port; stop trying if attempt limit reached
-        if (( port_attempts >= 3 )); then
+        if (( port_attempts >= 2 )); then
           break
         fi
         continue
@@ -1737,20 +1750,18 @@ run_region_speed_test() {
 
       # 2. Upload (Client -> Server, Normal mode)
       if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        local dl_hint="↓ $dl"
-        if [[ "$dl" == "—" ]]; then dl_hint="DL —"; fi
         if [[ -n "$COLOR_WARN" ]]; then
-          printf "  %s  %s  \033[%sm⏳ Замер UL (%ss) [%s]...\033[0m\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time" "$dl_hint"
+          printf "\r\033[2K  %s  %s  \033[%sm⏳ Замер UL (%ss)...\033[0m\r" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$COLOR_WARN" "$test_time"
         else
-          printf "  %s  %s  * Замер UL (%ss) [%s]...\r" \
-            "$(pad_str "$label" 38)" "$(pad_str "$ping_val" 14)" "$test_time" "$dl_hint"
+          printf "\r%79s\r  %s  %s  * Замер UL (%ss)...\r" "" \
+            "$(pad_str "$label" 35)" "$(pad_str "$ping_val" 14)" "$test_time"
         fi
       fi
 
       local res_ul ul_bps ul="—" ul_num="null"
-      res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -P 2 -J 2>/dev/null || echo "")
-      if [[ "$res_ul" == *"stream"* || "$res_ul" == *"parallel"* ]]; then
+      res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -P "$streams" -J 2>/dev/null || echo "")
+      if [[ "$res_ul" == *"stream"* || "$res_ul" == *"parallel"* || "$res_ul" == *"unable to create a new stream"* ]]; then
         res_ul=$(timeout $((test_time + 3)) iperf3 "${iperf_ver_flag[@]}" -c "$cur_host" -p "$p" -t "$test_time" -J 2>/dev/null || echo "")
       fi
 
@@ -1791,19 +1802,19 @@ run_region_speed_test() {
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if [[ -t 1 ]]; then
       if [[ "$NO_COLOR_MODE" == "true" || -n "${NO_COLOR:-}" ]]; then
-        printf "\r%80s\r  %s  %s  %s\n" "" \
-          "$(pad_str "$label" 38)" \
-          "$(pad_str "$(format_value "$ping_val")" 14)" \
-          "$(format_value "$speed")"
+        printf "\r%79s\r  %s  %s  %s\n" "" \
+          "$(pad_str "$label" 35)" \
+          "$(pad_str "$ping_val" 14)" \
+          "$speed"
       else
         printf "\r\033[2K  %s  %s  %s\n" \
-          "$(pad_str "$label" 38)" \
+          "$(pad_str "$label" 35)" \
           "$(pad_str "$(format_value "$ping_val")" 14)" \
           "$(format_value "$speed")"
       fi
     else
       printf "  %s  %s  %s\n" \
-        "$(pad_str "$label" 38)" \
+        "$(pad_str "$label" 35)" \
         "$(pad_str "$ping_val" 14)" \
         "$speed"
     fi
@@ -1845,46 +1856,20 @@ measure_ru_iperf() {
   )
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
+    bold "4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)"; printf "\n"
     printf "  %s  %s  %s\n" \
-      "$(pad_str "Регион (Узел связи)" 38)" \
+      "$(pad_str "Регион (Узел связи)" 35)" \
       "$(pad_str "Задержка (RTT)" 14)" \
       "Скорость (↓ DL / ↑ UL)"
     printf "  %s  %s  %s\n" \
-      "$(pad_str "--------------------------------------" 38)" \
+      "$(pad_str "-----------------------------------" 35)" \
       "$(pad_str "--------------" 14)" \
-      "-----------------------"
+      "----------------------"
   fi
 
-  # Find best region by lowest RTT
-  local best_idx=0
-  local min_rtt=999999.0
-  if [[ "$RUN_IPERF_ALL" != "true" && "$RUN_IPERF" == "true" ]]; then
-    local idx=0
-    for reg_entry in "${regions[@]}"; do
-      IFS=$'\t' read -r _ ping_val _ _ <<<"$reg_entry"
-      local num_val
-      num_val=$(grep -oE '^[0-9]+(\.[0-9]+)?' <<<"$ping_val" || echo "")
-      if [[ -n "$num_val" ]]; then
-        local is_better
-        is_better=$(awk -v v="$num_val" -v m="$min_rtt" 'BEGIN { print (v < m) ? 1 : 0 }')
-        if [[ "$is_better" -eq 1 ]]; then
-          min_rtt="$num_val"
-          best_idx="$idx"
-        fi
-      fi
-      ((idx++))
-    done
-  fi
-
-  local cur_idx=0
   for reg_entry in "${regions[@]}"; do
     IFS=$'\t' read -r label ping_val host fallback_host <<<"$reg_entry"
-    if [[ "$RUN_IPERF_ALL" == "true" || "$cur_idx" -eq "$best_idx" ]]; then
-      run_region_speed_test "$label" "$ping_val" "$host" "$fallback_host"
-    else
-      run_region_speed_test "$label" "$ping_val" "" ""
-    fi
-    ((cur_idx++))
+    run_region_speed_test "$label" "$ping_val" "$host" "$fallback_host"
   done
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
@@ -1893,12 +1878,6 @@ measure_ru_iperf() {
         printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
       else
         printf "  * Для замера пропускной способности iPerf3: apt install -y iperf3\n"
-      fi
-    elif [[ "$RUN_IPERF_ALL" != "true" && "$RUN_IPERF" == "true" ]]; then
-      if [[ -n "$COLOR_NULL" ]]; then
-        printf "  \033[%sm* Замер скорости проведен для оптимального региона по RTT. Для замера всех регионов: --iperf-all\033[0m\n" "$COLOR_NULL"
-      else
-        printf "  * Замер скорости проведен для оптимального региона по RTT. Для замера всех регионов: --iperf-all\n"
       fi
     fi
     printf "\n"
@@ -2186,10 +2165,11 @@ NodeCheck (RU Edition) — комплексный аудит серверных 
   -4, --ipv4               Принудительно использовать только IPv4
   -6, --ipv6               Принудительно использовать только IPv6
   -j, --json               Вывод результатов в чистом формате JSON
+  -s, --streams ЧИСЛО      Число параллельных потоков iPerf3 (по умолч.: 2 для 1 vCPU, 4 для 2+ vCPU)
   --no-iperf               Пропустить замер скорости iPerf3 (только пинг)
-  --iperf-all              Замер скорости iPerf3 по всем 7 регионам РФ (по умолч.: лучший по RTT)
+  --iperf-all              Замер скорости iPerf3 по всем 7 регионам РФ (по умолчанию включен)
   --full-iperf             Расширенный тест iPerf3 (по 10с на прием и отдачу)
-  --iperf-time СЕК         Время замера iPerf3 на прием и отдачу (по умолч.: 5с)
+  --iperf-time СЕК         Время замера iPerf3 на прием и отдачу (по умолч.: 3с)
   --no-color               Отключить цветовое форматирование ANSI
   -p, --proxy АДРЕС        Использовать SOCKS5/SOCKS5h прокси (хост:порт)
   -i, --interface ИНТЕРФЕЙС Привязать запросы к сетевому интерфейсу (eth0, ens3)
@@ -2199,11 +2179,12 @@ NodeCheck (RU Edition) — комплексный аудит серверных 
   -d, --debug              Режим отладки (сохранение трассировки в сессионный log-файл)
 
 Примеры:
-  ./nodecheck.sh                         # Стандартный экспресс-аудит (железо, GeoIP, сервисы, пинг и iPerf3 до лучшего узла)
-  ./nodecheck.sh --iperf-all             # Аудит с замером скорости до всех регионов РФ
+  ./nodecheck.sh                         # Комплексный аудит (железо, GeoIP, сервисы, пинг и iPerf3 по всем 7 регионам РФ)
+  ./nodecheck.sh -s 8                    # Аудит с 8 параллельными потоками iPerf3
+  ./nodecheck.sh --no-iperf              # Быстрый экспресс-аудит без замера скорости (~10-15 секунд)
+  ./nodecheck.sh --full-iperf            # Расширенный замер скорости (по 10с на каждый регион)
   ./nodecheck.sh -4                      # Аудит только по IPv4
   ./nodecheck.sh -6                      # Аудит только по IPv6
-  ./nodecheck.sh --no-iperf              # Быстрый аудит без замера скорости (~10-15 секунд)
   ./nodecheck.sh -j                      # Вывод в формате JSON для мониторинга и ботов
   ./nodecheck.sh --no-color > report.txt # Сохранение чистого отчета без ANSI-кодов
 
@@ -2239,6 +2220,13 @@ parse_arguments() {
         JSON_OUTPUT=true
         shift
         ;;
+      -s|--streams)
+        if [[ $# -lt 2 || -z "$2" || ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+          error_exit "Для опции $1 требуется положительное целое число (например, -s 4)"
+        fi
+        IPERF_STREAMS="$2"
+        shift 2
+        ;;
       --no-iperf)
         RUN_IPERF=false
         shift
@@ -2255,8 +2243,8 @@ parse_arguments() {
         shift
         ;;
       --iperf-time)
-        if [[ $# -lt 2 || -z "$2" || "$2" =~ [^0-9] || "$2" -le 0 ]]; then
-          error_exit "Для опции $1 требуется положительное число секунд (например, --iperf-time 5)"
+        if [[ $# -lt 2 || -z "$2" || ! "$2" =~ ^[1-9][0-9]*$ ]]; then
+          error_exit "Для опции $1 требуется положительное целое число секунд (например, --iperf-time 3)"
         fi
         IPERF_TIME="$2"
         IPERF_TIME_DL="$2"
@@ -2361,9 +2349,6 @@ main() {
   measure_ru_pings
   progress_clear
 
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    bold "4. ⚡️ Связность и скорость по регионам РФ (Multi-Region Latency & Throughput)"; printf "\n"
-  fi
   measure_ru_iperf
 
   if [[ "$JSON_OUTPUT" == "true" ]]; then
