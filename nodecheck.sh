@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.7.0-ru"
+SCRIPT_VERSION="3.7.1-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -87,6 +87,7 @@ USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 DEBUG_LOG_FILE=""
 TMP_WORK_DIR=""
+MAIN_PID=""
 CPU_STAT_START=""
 
 NO_COLOR_MODE=false
@@ -318,10 +319,18 @@ error_exit() {
 }
 
 cleanup() {
+  if [[ -n "${MAIN_PID:-}" && "$MAIN_PID" -ne "$BASHPID" ]]; then
+    return 0
+  fi
+  if [[ "$$" -ne "$BASHPID" ]]; then
+    return 0
+  fi
+
   trap - EXIT INT TERM
   progress_clear
   if [[ -n "$SAVED_STTY" && -r /dev/tty ]]; then
     stty "$SAVED_STTY" < /dev/tty 2>/dev/null || true
+    SAVED_STTY=""
   fi
   local pids
   pids=$(jobs -p 2>/dev/null)
@@ -1641,16 +1650,37 @@ run_services_check() {
 # 4. Multi-Region RU Connectivity & Speed
 # ------------------------------------------------------------------------------
 
+resolve_target_ip() {
+  local target_host="$1"
+  local resolved_ip=""
+  if [[ "$IPV6_ONLY" == "true" ]] || [[ "$IPV4_SUPPORTED" -ne 1 && "$IPV6_SUPPORTED" -eq 1 ]]; then
+    if is_command_available "getent"; then
+      resolved_ip=$(getent ahostsv6 "$target_host" 2>/dev/null | awk '{print $1; exit}')
+    fi
+  else
+    if is_command_available "getent"; then
+      resolved_ip=$(getent ahostsv4 "$target_host" 2>/dev/null | awk '{print $1; exit}')
+    fi
+  fi
+  if [[ -n "$resolved_ip" ]]; then
+    echo "$resolved_ip"
+  else
+    echo "$target_host"
+  fi
+}
+
 ping_host() {
   local host="$1" out_file="$2"
   local ping_flags=()
-  if [[ "$IPV4_ONLY" == "true" ]]; then
+  if [[ "$IPV4_ONLY" == "true" ]] || [[ "$IPV6_SUPPORTED" -eq 0 ]]; then
     ping_flags+=(-4)
-  elif [[ "$IPV6_ONLY" == "true" ]]; then
+  elif [[ "$IPV6_ONLY" == "true" ]] || [[ "$IPV4_SUPPORTED" -eq 0 && "$IPV6_SUPPORTED" -eq 1 ]]; then
     ping_flags+=(-6)
   fi
+  local target_ip
+  target_ip=$(resolve_target_ip "$host")
   local p
-  p=$(LC_ALL=C ping "${ping_flags[@]}" -c 2 -W 2 "$host" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
+  p=$(LC_ALL=C ping "${ping_flags[@]}" -c 2 -W 2 "$target_ip" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
   if [[ -n "$p" && "$p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     printf "%.1f ms" "$p" > "$out_file"
   else
@@ -1735,6 +1765,13 @@ iperf_stream_test() {
       stream_args+=("-P" "$active_streams")
     fi
 
+    local iperf_ver_flag=()
+    if [[ "$IPV6_ONLY" == "true" ]] || [[ "$IPV4_SUPPORTED" -ne 1 && "$IPV6_SUPPORTED" -eq 1 ]]; then
+      iperf_ver_flag+=(-6)
+    elif [[ "$IPV4_ONLY" == "true" ]] || [[ "$IPV6_SUPPORTED" -eq 0 ]]; then
+      iperf_ver_flag+=(-4)
+    fi
+
     local raw_out="$TMP_WORK_DIR/iperf_raw.log"
     : > "$raw_out"
 
@@ -1750,10 +1787,7 @@ iperf_stream_test() {
         if read -t 0.15 -n 1 user_key < /dev/tty 2>/dev/null; then
           if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
             IPERF_SKIPPED=true
-            kill -TERM "$iperf_pid" 2>/dev/null || true
-            pkill -KILL -P "$iperf_pid" 2>/dev/null || true
-            kill -KILL "$iperf_pid" 2>/dev/null || true
-            wait "$iperf_pid" 2>/dev/null || true
+            { kill -TERM "$iperf_pid" 2>/dev/null; sleep 0.05; kill -KILL "$iperf_pid" 2>/dev/null; wait "$iperf_pid" 2>/dev/null; } 2>/dev/null || true
             break
           fi
         fi
@@ -1761,10 +1795,91 @@ iperf_stream_test() {
         sleep 0.15
       fi
 
-      # 2. Check for new output lines
+      # 2. Check for new output lines without subshell process substitution
       local total_lines=0
       total_lines=$(wc -l < "$raw_out" 2>/dev/null || echo 0)
       if (( total_lines > last_line )); then
+        local chunk=""
+        chunk=$(sed -n "$((last_line + 1)),${total_lines}p" "$raw_out" 2>/dev/null || true)
+        if [[ -n "$chunk" ]]; then
+          while IFS= read -r line; do
+            if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
+              has_stream_error=true
+            fi
+            if [[ "$line" == *"busy running a test"* ]]; then
+              has_server_busy=true
+            fi
+            if [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]]; then
+              has_conn_error=true
+            fi
+
+            if (( active_streams > 1 )); then
+              [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+            else
+              [[ "$line" =~ ^[[:space:]]*\[[[:space:]]*[0-9]+\] || "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
+            fi
+
+            if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+([a-zA-Z]+bits/sec|[a-zA-Z]+Bytes/sec) ]]; then
+              local val="${BASH_REMATCH[1]}"
+              local unit="${BASH_REMATCH[3]}"
+              local mbps
+              mbps=$(convert_to_mbps "$val" "$unit")
+              [[ "$mbps" == "null" || -z "$mbps" ]] && continue
+
+              if [[ "$line" == *"receiver"* ]]; then
+                final_recv="$mbps"
+              elif [[ "$line" == *"sender"* ]]; then
+                final_send="$mbps"
+              else
+                last_interval="$mbps"
+                if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+                  if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+                    if [[ "$mode" == "DL" ]]; then
+                      printf "\r\033[2K  %s  %s  \033[%sm↓ %s Mbps...\033[0m\r" \
+                        "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$mbps"
+                    else
+                      printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ %s Mbps...\033[0m\r" \
+                        "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
+                    fi
+                  else
+                    if [[ "$mode" == "DL" ]]; then
+                      printf "\r\033[2K  %s  %s  ↓ %s Mbps...\r" \
+                        "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$mbps"
+                    else
+                      printf "\r\033[2K  %s  %s  ↓ %s / ↑ %s Mbps...\r" \
+                        "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$dl_speed_for_ul" "$mbps"
+                    fi
+                  fi
+                fi
+              fi
+            fi
+          done <<< "$chunk"
+        fi
+        last_line=$total_lines
+      fi
+
+      # 3. Watchdog timeout
+      if (( SECONDS - start_sec > test_time + 4 )); then
+        { kill -TERM "$iperf_pid" 2>/dev/null; sleep 0.05; kill -KILL "$iperf_pid" 2>/dev/null; wait "$iperf_pid" 2>/dev/null; } 2>/dev/null || true
+        break
+      fi
+    done
+
+    wait "$iperf_pid" 2>/dev/null || true
+
+    if [[ "$IPERF_SKIPPED" == "true" ]]; then
+      IPERF_LAST_STR="Skipped"
+      IPERF_LAST_NUM="null"
+      IPERF_LAST_STATUS=2
+      break
+    fi
+
+    local final_total=0
+    final_total=$(wc -l < "$raw_out" 2>/dev/null || echo 0)
+    if (( final_total > last_line )); then
+      local final_chunk=""
+      final_chunk=$(sed -n "$((last_line + 1)),${final_total}p" "$raw_out" 2>/dev/null || true)
+      if [[ -n "$final_chunk" ]]; then
         while IFS= read -r line; do
           if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
             has_stream_error=true
@@ -1788,92 +1903,16 @@ iperf_stream_test() {
             local mbps
             mbps=$(convert_to_mbps "$val" "$unit")
             [[ "$mbps" == "null" || -z "$mbps" ]] && continue
-
             if [[ "$line" == *"receiver"* ]]; then
               final_recv="$mbps"
             elif [[ "$line" == *"sender"* ]]; then
               final_send="$mbps"
             else
               last_interval="$mbps"
-              if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-                if [[ -n "$COLOR_TABLE_VALUE" ]]; then
-                  if [[ "$mode" == "DL" ]]; then
-                    printf "\r\033[2K  %s  %s  \033[%sm↓ %s Mbps...\033[0m\r" \
-                      "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$mbps"
-                  else
-                    printf "\r\033[2K  %s  %s  \033[%sm↓ %s / ↑ %s Mbps...\033[0m\r" \
-                      "$(pad_str "$label" 37)" "$(pad_str "$(format_value "$ping_val")" 10)" "$COLOR_TABLE_VALUE" "$dl_speed_for_ul" "$mbps"
-                  fi
-                else
-                  if [[ "$mode" == "DL" ]]; then
-                    printf "\r\033[2K  %s  %s  ↓ %s Mbps...\r" \
-                      "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$mbps"
-                  else
-                    printf "\r\033[2K  %s  %s  ↓ %s / ↑ %s Mbps...\r" \
-                      "$(pad_str "$label" 37)" "$(pad_str "$ping_val" 10)" "$dl_speed_for_ul" "$mbps"
-                  fi
-                fi
-              fi
             fi
           fi
-        done < <(sed -n "$((last_line + 1)),${total_lines}p" "$raw_out" 2>/dev/null)
-        last_line=$total_lines
+        done <<< "$final_chunk"
       fi
-
-      # 3. Watchdog timeout
-      if (( SECONDS - start_sec > test_time + 4 )); then
-        kill -TERM "$iperf_pid" 2>/dev/null || true
-        pkill -KILL -P "$iperf_pid" 2>/dev/null || true
-        kill -KILL "$iperf_pid" 2>/dev/null || true
-        wait "$iperf_pid" 2>/dev/null || true
-        break
-      fi
-    done
-
-    wait "$iperf_pid" 2>/dev/null || true
-
-    if [[ "$IPERF_SKIPPED" == "true" ]]; then
-      IPERF_LAST_STR="Skipped"
-      IPERF_LAST_NUM="null"
-      IPERF_LAST_STATUS=2
-      break
-    fi
-
-    local final_total=0
-    final_total=$(wc -l < "$raw_out" 2>/dev/null || echo 0)
-    if (( final_total > last_line )); then
-      while IFS= read -r line; do
-        if [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]]; then
-          has_stream_error=true
-        fi
-        if [[ "$line" == *"busy running a test"* ]]; then
-          has_server_busy=true
-        fi
-        if [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]]; then
-          has_conn_error=true
-        fi
-
-        if (( active_streams > 1 )); then
-          [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
-        else
-          [[ "$line" =~ ^[[:space:]]*\[[[:space:]]*[0-9]+\] || "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
-        fi
-
-        if [[ "$line" =~ ([0-9]+(\.[0-9]+)?)[[:space:]]+([a-zA-Z]+bits/sec|[a-zA-Z]+Bytes/sec) ]]; then
-          local val="${BASH_REMATCH[1]}"
-          local unit="${BASH_REMATCH[3]}"
-          local mbps
-          mbps=$(convert_to_mbps "$val" "$unit")
-          [[ "$mbps" == "null" || -z "$mbps" ]] && continue
-          if [[ "$line" == *"receiver"* ]]; then
-            final_recv="$mbps"
-          elif [[ "$line" == *"sender"* ]]; then
-            final_send="$mbps"
-          else
-            last_interval="$mbps"
-          fi
-        fi
-      done < <(sed -n "$((last_line + 1)),${final_total}p" "$raw_out" 2>/dev/null)
     fi
 
     local res_mbps="${final_recv:-${final_send:-$last_interval}}"
@@ -1955,12 +1994,8 @@ run_region_speed_test() {
     while read -t 0.01 -n 1000 _ < /dev/tty 2>/dev/null; do :; done
   fi
 
-  local iperf_ver_flag=()
-  if [[ "$IPV4_ONLY" == "true" ]]; then
-    iperf_ver_flag+=(-4)
-  elif [[ "$IPV6_ONLY" == "true" ]]; then
-    iperf_ver_flag+=(-6)
-  fi
+  local target_ip
+  target_ip=$(resolve_target_ip "$host")
 
   local streams="$IPERF_STREAMS"
   if [[ -z "$streams" ]]; then
@@ -2011,14 +2046,14 @@ run_region_speed_test() {
     fi
 
     # Fast TCP pre-check (1.0s) to skip closed or firewalled ports immediately
-    if ! timeout 1.0 bash -c "echo > /dev/tcp/$host/$p" 2>/dev/null; then
+    if ! timeout 1.0 bash -c "echo > /dev/tcp/$target_ip/$p" 2>/dev/null; then
       continue
     fi
 
     ((port_attempts++))
 
     # 1. Download (Server -> Client, Reverse mode -R)
-    iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+    iperf_stream_test "$target_ip" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
     if [[ "$IPERF_SKIPPED" == "true" ]]; then
       break
     fi
@@ -2026,15 +2061,15 @@ run_region_speed_test() {
     # If single-port host was busy running another test, wait 1.5s and retry once
     if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" && ${#ports[@]} -eq 1 ]]; then
       sleep 1.5
-      iperf_stream_test "$host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+      iperf_stream_test "$target_ip" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
       if [[ "$IPERF_SKIPPED" == "true" ]]; then
         break
       fi
     fi
 
     if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
-      # If multi-port host has failed 2 active ports, stop scanning further ports
-      if (( port_attempts >= 2 )); then
+      # If multi-port host has failed 4 active ports, stop scanning further ports
+      if (( port_attempts >= 4 )); then
         break
       fi
       continue
@@ -2075,7 +2110,7 @@ run_region_speed_test() {
     fi
 
     # 2. Upload (Client -> Server, Normal mode)
-    iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    iperf_stream_test "$target_ip" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
     if [[ "$IPERF_SKIPPED" == "true" ]]; then
       best_ul="Skipped"
       break
@@ -2083,7 +2118,7 @@ run_region_speed_test() {
 
     if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" ]]; then
       sleep 1.5
-      iperf_stream_test "$host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+      iperf_stream_test "$target_ip" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
       if [[ "$IPERF_SKIPPED" == "true" ]]; then
         best_ul="Skipped"
         break
@@ -2305,6 +2340,9 @@ measure_local_uplink() {
   IPERF_SKIPPED=false
   local label="• Local Uplink (${dc_name})"
 
+  local dc_ip
+  dc_ip=$(resolve_target_ip "$dc_host")
+
   for p in "${ports[@]}"; do
     if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
       local user_key=""
@@ -2316,12 +2354,12 @@ measure_local_uplink() {
       fi
     fi
 
-    if ! timeout 1.0 bash -c "echo > /dev/tcp/$dc_host/$p" 2>/dev/null; then
+    if ! timeout 1.0 bash -c "echo > /dev/tcp/$dc_ip/$p" 2>/dev/null; then
       continue
     fi
 
     # 1. Download
-    iperf_stream_test "$dc_host" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
+    iperf_stream_test "$dc_ip" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
     if [[ "$IPERF_SKIPPED" == "true" ]]; then
       break
     fi
@@ -2352,7 +2390,7 @@ measure_local_uplink() {
     fi
 
     # 2. Upload
-    iperf_stream_test "$dc_host" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
+    iperf_stream_test "$dc_ip" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
     if [[ "$IPERF_SKIPPED" == "true" ]]; then
       best_ul="Skipped"
       break
@@ -2819,6 +2857,8 @@ parse_arguments() {
 }
 
 main() {
+  MAIN_PID=$$
+  export MAIN_PID
   CPU_STAT_START=$(head -n 1 /proc/stat 2>/dev/null || echo "")
 
   parse_arguments "$@"
