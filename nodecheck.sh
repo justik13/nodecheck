@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.7.1-ru"
+SCRIPT_VERSION="3.8.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -1157,25 +1157,6 @@ lookup_twitter_x() {
   if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
 }
 
-lookup_claude_ai() {
-  local raw resp code
-  raw=$(curl_wrapper GET "https://claude.ai" --timeout 3 -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
-  code=$(tail -n 2 <<<"$raw" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
-  code="${code:-000}"
-  resp=$(head -c 8192 <<<"$raw" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
-  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
-    echo "Yes"
-  elif [[ "$code" == "403" ]]; then
-    if [[ "$resp" == *"cf-mitigated"* || "$resp" == *"challenges.cloudflare.com"* || "$resp" == *"Just a moment"* ]]; then
-      echo "No (403 Cloudflare Challenge)"
-    else
-      echo "No (403 Region Blocked)"
-    fi
-  else
-    echo "No ($code)"
-  fi
-}
-
 lookup_rutracker() {
   local code
   code=$(curl_http_code "https://rutracker.org")
@@ -1418,30 +1399,6 @@ lookup_reddit() {
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
 }
 
-lookup_signal() {
-  local code
-  code=$(curl_http_code "https://chat.signal.org")
-  if [[ "$code" =~ ^(200|301|302|404)$ ]]; then
-    echo "Yes"
-  elif [[ "$code" == "000" ]]; then
-    echo "No (Timeout / TSPU Block)"
-  else
-    echo "No ($code)"
-  fi
-}
-
-lookup_notion() {
-  local code
-  code=$(curl_http_code "https://www.notion.so")
-  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
-    echo "Yes"
-  elif [[ "$code" == "403" ]]; then
-    echo "No (403 Geoblocked)"
-  else
-    echo "No ($code)"
-  fi
-}
-
 # ------------------------------------------------------------------------------
 # 3. RU Reverse Geoblocking Lookups
 # ------------------------------------------------------------------------------
@@ -1556,7 +1513,6 @@ run_services_check() {
     "lookup_discord" "$s_dir/discord"
     "lookup_twitter_x" "$s_dir/twitter"
     "lookup_chatgpt" "$s_dir/chatgpt"
-    "lookup_claude_ai" "$s_dir/claude"
     "lookup_google" "$s_dir/google"
     "lookup_gemini" "$s_dir/gemini"
     "lookup_youtube" "$s_dir/youtube"
@@ -1570,8 +1526,6 @@ run_services_check() {
     "lookup_playstation" "$s_dir/playstation"
     "lookup_reddit" "$s_dir/reddit"
     "lookup_apple" "$s_dir/apple"
-    "lookup_signal" "$s_dir/signal"
-    "lookup_notion" "$s_dir/notion"
     "lookup_gosuslugi" "$s_dir/gosuslugi"
     "lookup_nalog" "$s_dir/nalog"
     "lookup_mosru" "$s_dir/mosru"
@@ -1613,7 +1567,6 @@ run_services_check() {
   ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(read_val "$s_dir/discord" "No")" )
   ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(read_val "$s_dir/twitter" "No")" )
   ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(read_val "$s_dir/chatgpt" "No")" )
-  ARR_RU_UNBLOCK+=( "Anthropic Claude AI"$'\t'"$(read_val "$s_dir/claude" "No")" )
   ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(read_val "$s_dir/google" "N/A")" )
   ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(read_val "$s_dir/gemini" "No")" )
   ARR_RU_UNBLOCK+=( "YouTube"$'\t'"$yt_res" )
@@ -1627,8 +1580,6 @@ run_services_check() {
   ARR_RU_UNBLOCK+=( "PlayStation Network"$'\t'"$(read_val "$s_dir/playstation" "No")" )
   ARR_RU_UNBLOCK+=( "Reddit"$'\t'"$(read_val "$s_dir/reddit" "No")" )
   ARR_RU_UNBLOCK+=( "Apple Services"$'\t'"$(read_val "$s_dir/apple" "No")" )
-  ARR_RU_UNBLOCK+=( "Signal"$'\t'"$(read_val "$s_dir/signal" "No")" )
-  ARR_RU_UNBLOCK+=( "Notion"$'\t'"$(read_val "$s_dir/notion" "No")" )
 
   ARR_RU_LOCAL+=( "Госуслуги (gosuslugi.ru)"$'\t'"$(read_val "$s_dir/gosuslugi" "Blocked")" )
   ARR_RU_LOCAL+=( "ФНС (nalog.gov.ru)"$'\t'"$(read_val "$s_dir/nalog" "Blocked")" )
@@ -1938,9 +1889,6 @@ iperf_stream_test() {
 
 # Regional test targets: Region | City | Provider | Host | PortRange
 RU_REGIONAL_SERVERS=(
-  "Европа / Международные хабы"$'\t'"Амстердам"$'\t'"Clouvider / AMS-IX"$'\t'"ams.speedtest.clouvider.net"$'\t'"5200-5209"
-  "Европа / Международные хабы"$'\t'"Франкфурт"$'\t'"Clouvider / DE-CIX"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
-  "Европа / Международные хабы"$'\t'"Лондон"$'\t'"Clouvider / LINX"$'\t'"lon.speedtest.clouvider.net"$'\t'"5200-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"ЭР-Телеком / Дом.ру"$'\t'"st.msk.ertelecom.ru"$'\t'"5201-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'"3333"
@@ -2045,8 +1993,8 @@ run_region_speed_test() {
       fi
     fi
 
-    # Fast TCP pre-check (1.0s) to skip closed or firewalled ports immediately
-    if ! timeout 1.0 bash -c "echo > /dev/tcp/$target_ip/$p" 2>/dev/null; then
+    # Fast TCP pre-check (2.0s) to skip closed or firewalled ports immediately without sending corrupting payload
+    if ! timeout 2.0 bash -c "true > /dev/tcp/$target_ip/$p" 2>/dev/null; then
       continue
     fi
 
@@ -2354,7 +2302,8 @@ measure_local_uplink() {
       fi
     fi
 
-    if ! timeout 1.0 bash -c "echo > /dev/tcp/$dc_ip/$p" 2>/dev/null; then
+    # Fast TCP pre-check (2.0s) to skip closed or firewalled ports immediately without sending corrupting payload
+    if ! timeout 2.0 bash -c "true > /dev/tcp/$dc_ip/$p" 2>/dev/null; then
       continue
     fi
 
@@ -2724,7 +2673,7 @@ display_help() {
 Использование: nodecheck.sh [ОПЦИИ]
 
 NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит серверных нод и сетевого стека под РФ
-(Аплинк ноды, международные европейские хабы AMS-IX/DE-CIX/LINX и 7 регионов РФ)
+(Аплинк ноды и 7 регионов РФ)
 
 Управление:
   <Enter> / Пробел         Мгновенно пропустить текущий узел при замере скорости iPerf3
