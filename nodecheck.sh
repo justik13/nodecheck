@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.8.0-ru"
+SCRIPT_VERSION="3.8.1-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -1959,6 +1959,8 @@ run_region_speed_test() {
     ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
   elif [[ "$port_spec" == "5201-5209" ]]; then
     ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
+  elif [[ "$port_spec" == "5201-5210" ]]; then
+    ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209 5210)
   else
     ports=("$port_spec")
   fi
@@ -2194,64 +2196,107 @@ measure_ru_iperf() {
   fi
 }
 
-get_local_datacenter_target() {
+get_local_datacenter_candidates() {
   local cc="${NODE_COUNTRY_CODE^^}"
   case "$cc" in
-    "DE")
-      echo "Frankfurt, Clouvider 10G"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
-      ;;
-    "NL")
-      echo "Amsterdam, Clouvider 10G"$'\t'"ams.speedtest.clouvider.net"$'\t'"5200-5209"
-      ;;
-    "GB"|"UK")
-      echo "London, Clouvider 10G"$'\t'"lon.speedtest.clouvider.net"$'\t'"5200-5209"
-      ;;
     "RU")
-      echo "Moscow, Hostkey 10G"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
+      cat <<EOF
+Moscow, Hostkey 10G	spd-rudp.hostkey.ru	5201-5209
+Moscow, ER-Telecom 10G	st.msk.ertelecom.ru	5201-5209
+St. Petersburg, ER-Telecom 10G	st.spb.ertelecom.ru	5201-5209
+Frankfurt, Clouvider 10G	fra.speedtest.clouvider.net	5200-5209
+EOF
       ;;
-    "US")
-      echo "New York, Clouvider 10G"$'\t'"nyc.speedtest.clouvider.net"$'\t'"5200-5209"
+    "US"|"CA")
+      cat <<EOF
+New York, Leaseweb 10G	speedtest.nyc1.us.leaseweb.net	5201-5210
+New York, Clouvider 10G	nyc.speedtest.clouvider.net	5200-5209
+Los Angeles, Clouvider 10G	la.speedtest.clouvider.net	5200-5209
+London, Clouvider 10G	lon.speedtest.clouvider.net	5200-5209
+EOF
       ;;
-    "FR")
-      echo "Paris, Testdebit 10G"$'\t'"paris.testdebit.info"$'\t'"5200-5209"
-      ;;
-    "FI"|"SE"|"NO"|"DK"|"EE"|"LV"|"LT"|"PL"|"AT"|"CH"|"CZ"|"BE")
-      echo "Frankfurt, Clouvider 10G"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
+    "SG"|"HK"|"JP"|"KR"|"TW"|"AU"|"NZ"|"IN"|"TH"|"MY"|"VN"|"ID")
+      cat <<EOF
+Singapore, Leaseweb 10G	speedtest.sin1.sg.leaseweb.net	5201-5210
+Tokyo, Clouvider 10G	tyo.speedtest.clouvider.net	5200-5209
+Frankfurt, Clouvider 10G	fra.speedtest.clouvider.net	5200-5209
+EOF
       ;;
     *)
-      echo "Frankfurt, Clouvider 10G"$'\t'"fra.speedtest.clouvider.net"$'\t'"5200-5209"
+      cat <<EOF
+Amsterdam, Eranium 100G	iperf-ams-nl.eranium.net	5201-5210
+Frankfurt, Clouvider 10G	fra.speedtest.clouvider.net	5200-5209
+London, Clouvider 10G	lon.speedtest.clouvider.net	5200-5209
+Amsterdam, Clouvider 10G	ams.speedtest.clouvider.net	5200-5209
+EOF
       ;;
   esac
 }
 
 measure_local_uplink() {
-  local target_info
-  target_info=$(get_local_datacenter_target)
-  local dc_name dc_host dc_port_spec
-  IFS=$'\t' read -r dc_name dc_host dc_port_spec <<<"$target_info"
+  local candidates=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && candidates+=( "$line" )
+  done < <(get_local_datacenter_candidates)
+
+  if (( ${#candidates[@]} == 0 )); then
+    return
+  fi
+
+  # Parallel ICMP latency measurement to candidate pool (Ookla-style Best Server selection)
+  local pids=()
+  for i in "${!candidates[@]}"; do
+    local c_name c_host c_ports
+    IFS=$'\t' read -r c_name c_host c_ports <<< "${candidates[$i]}"
+    local p_file="$TMP_WORK_DIR/cand_ping_${i}.txt"
+    ping_host "$c_host" "$p_file" &
+    pids+=( $! )
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" 2>/dev/null || true
+  done
+
+  # Rank candidates by lowest RTT
+  local scored_candidates=()
+  for i in "${!candidates[@]}"; do
+    local c_name c_host c_ports
+    IFS=$'\t' read -r c_name c_host c_ports <<< "${candidates[$i]}"
+    local p_file="$TMP_WORK_DIR/cand_ping_${i}.txt"
+    local ping_val="N/A" ping_num="999999"
+    if [[ -f "$p_file" ]]; then
+      ping_val=$(read_val "$p_file" "N/A")
+      local num="${ping_val%% ms*}"
+      if [[ "$num" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        ping_num="$num"
+      fi
+    fi
+    scored_candidates+=( "${ping_num}"$'\t'"${ping_val}"$'\t'"${candidates[$i]}" )
+  done
+
+  local sorted_candidates=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && sorted_candidates+=( "$line" )
+  done < <(printf '%s\n' "${scored_candidates[@]}" | sort -n -t$'\t' -k1,1)
+
+  # Pick the best server by lowest latency
+  local best_cand="${sorted_candidates[0]}"
+  local best_rtt best_ping_val dc_name dc_host dc_port_spec
+  IFS=$'\t' read -r best_rtt best_ping_val dc_name dc_host dc_port_spec <<< "$best_cand"
 
   NODE_UPLINK_TARGET="$dc_name"
   NODE_UPLINK_HOST="$dc_host"
-  NODE_UPLINK_PING="N/A"
-  NODE_UPLINK_PING_NUM="null"
+  NODE_UPLINK_PING="$best_ping_val"
+  if [[ "$best_rtt" != "999999" ]]; then
+    NODE_UPLINK_PING_NUM="$best_rtt"
+  else
+    NODE_UPLINK_PING_NUM="null"
+  fi
   NODE_UPLINK_DL="null"
   NODE_UPLINK_UL="null"
   NODE_UPLINK_STATUS=""
 
-  local p_file="$TMP_WORK_DIR/local_uplink_ping.txt"
-  ping_host "$dc_host" "$p_file"
-  local ping_val="N/A"
-  if [[ -f "$p_file" ]]; then
-    ping_val=$(read_val "$p_file" "N/A")
-  fi
-  NODE_UPLINK_PING="$ping_val"
-  local ping_num="${ping_val%% ms*}"
-  if [[ "$ping_num" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    NODE_UPLINK_PING_NUM="$ping_num"
-  fi
-
   if [[ "$RUN_IPERF" != "true" ]] || ! is_command_available "iperf3"; then
-    NODE_UPLINK_STATUS="$ping_val ($dc_name)"
+    NODE_UPLINK_STATUS="$best_ping_val ($dc_name)"
     return
   fi
 
@@ -2262,15 +2307,6 @@ measure_local_uplink() {
 
   if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
     while read -t 0.01 -n 1000 _ < /dev/tty 2>/dev/null; do :; done
-  fi
-
-  local ports=()
-  if [[ "$dc_port_spec" == "5200-5209" ]]; then
-    ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
-  elif [[ "$dc_port_spec" == "5201-5209" ]]; then
-    ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
-  else
-    ports=("$dc_port_spec")
   fi
 
   local test_time=2
@@ -2285,71 +2321,106 @@ measure_local_uplink() {
 
   local best_dl="—" best_ul="—"
   local best_dl_num="null" best_ul_num="null"
+  local active_dc_name="$dc_name"
+  local active_ping_val="$best_ping_val"
+  local active_ping_num="$NODE_UPLINK_PING_NUM"
   IPERF_SKIPPED=false
-  local label="• Local Uplink (${dc_name})"
 
-  local dc_ip
-  dc_ip=$(resolve_target_ip "$dc_host")
+  # Attempt bandwidth benchmark starting with best latency candidate, with automatic failover
+  for cand_entry in "${sorted_candidates[@]}"; do
+    local c_rtt c_pval c_name c_host c_portspec
+    IFS=$'\t' read -r c_rtt c_pval c_name c_host c_portspec <<< "$cand_entry"
 
-  for p in "${ports[@]}"; do
-    if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
-      local user_key=""
-      if read -t 0.05 -n 1 user_key < /dev/tty 2>/dev/null; then
-        if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
-          IPERF_SKIPPED=true
-          break
-        fi
-      fi
+    active_dc_name="$c_name"
+    active_ping_val="$c_pval"
+    if [[ "$c_rtt" != "999999" ]]; then
+      active_ping_num="$c_rtt"
+    else
+      active_ping_num="null"
     fi
 
-    # Fast TCP pre-check (2.0s) to skip closed or firewalled ports immediately without sending corrupting payload
-    if ! timeout 2.0 bash -c "true > /dev/tcp/$dc_ip/$p" 2>/dev/null; then
-      continue
+    local ports=()
+    if [[ "$c_portspec" == "5200-5209" ]]; then
+      ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
+    elif [[ "$c_portspec" == "5201-5209" ]]; then
+      ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
+    elif [[ "$c_portspec" == "5201-5210" ]]; then
+      ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209 5210)
+    else
+      ports=("$c_portspec")
     fi
 
-    # 1. Download
-    iperf_stream_test "$dc_ip" "$p" "DL" "$test_time" "$streams" "$label" "$ping_val" ""
-    if [[ "$IPERF_SKIPPED" == "true" ]]; then
-      break
-    fi
+    local c_ip
+    c_ip=$(resolve_target_ip "$c_host")
+    local label="• Local Uplink (${c_name})"
+    local cand_success=false
 
-    if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
-      continue
-    fi
-
-    best_dl="$IPERF_LAST_STR"
-    best_dl_num="$IPERF_LAST_NUM"
-
-    for ((s=0; s<5; s++)); do
+    for p in "${ports[@]}"; do
       if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
         local user_key=""
-        if read -t 0.1 -n 1 user_key < /dev/tty 2>/dev/null; then
+        if read -t 0.05 -n 1 user_key < /dev/tty 2>/dev/null; then
           if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
             IPERF_SKIPPED=true
-            break
+            break 2
           fi
         fi
-      else
-        sleep 0.1
       fi
+
+      # Fast TCP pre-check (2.0s) to skip closed or firewalled ports immediately without sending corrupting payload
+      if ! timeout 2.0 bash -c "true > /dev/tcp/$c_ip/$p" 2>/dev/null; then
+        continue
+      fi
+
+      # 1. Download
+      iperf_stream_test "$c_ip" "$p" "DL" "$test_time" "$streams" "$label" "$c_pval" ""
+      if [[ "$IPERF_SKIPPED" == "true" ]]; then
+        break 2
+      fi
+
+      if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
+        continue
+      fi
+
+      best_dl="$IPERF_LAST_STR"
+      best_dl_num="$IPERF_LAST_NUM"
+
+      for ((s=0; s<5; s++)); do
+        if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
+          local user_key=""
+          if read -t 0.1 -n 1 user_key < /dev/tty 2>/dev/null; then
+            if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
+              IPERF_SKIPPED=true
+              break 2
+            fi
+          fi
+        else
+          sleep 0.1
+        fi
+      done
+
+      # 2. Upload
+      iperf_stream_test "$c_ip" "$p" "UL" "$test_time" "$streams" "$label" "$c_pval" "$best_dl"
+      if [[ "$IPERF_SKIPPED" == "true" ]]; then
+        best_ul="Skipped"
+        break 2
+      fi
+
+      if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
+        best_ul="$IPERF_LAST_STR"
+        best_ul_num="$IPERF_LAST_NUM"
+      fi
+
+      cand_success=true
+      break
     done
-    if [[ "$IPERF_SKIPPED" == "true" ]]; then
-      best_ul="Skipped"
+
+    if [[ "$cand_success" == "true" ]]; then
+      NODE_UPLINK_TARGET="$active_dc_name"
+      NODE_UPLINK_HOST="$c_host"
+      NODE_UPLINK_PING="$active_ping_val"
+      NODE_UPLINK_PING_NUM="$active_ping_num"
       break
     fi
-
-    # 2. Upload
-    iperf_stream_test "$dc_ip" "$p" "UL" "$test_time" "$streams" "$label" "$ping_val" "$best_dl"
-    if [[ "$IPERF_SKIPPED" == "true" ]]; then
-      best_ul="Skipped"
-      break
-    fi
-
-    if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
-      best_ul="$IPERF_LAST_STR"
-      best_ul_num="$IPERF_LAST_NUM"
-    fi
-    break
   done
 
   # Clear live streaming indicator before printing header
@@ -2364,16 +2435,16 @@ measure_local_uplink() {
 
   if [[ "$IPERF_SKIPPED" == "true" ]]; then
     if [[ "$best_dl" != "—" && "$best_dl" != "Skipped" ]]; then
-      NODE_UPLINK_STATUS="$ping_val | ↓ $best_dl / ↑ Skipped ($dc_name)"
+      NODE_UPLINK_STATUS="$active_ping_val | ↓ $best_dl / ↑ Skipped ($active_dc_name)"
     else
-      NODE_UPLINK_STATUS="$ping_val | Skipped ($dc_name)"
+      NODE_UPLINK_STATUS="$active_ping_val | Skipped ($active_dc_name)"
     fi
   elif [[ "$best_dl" != "—" && "$best_ul" != "—" ]]; then
-    NODE_UPLINK_STATUS="$ping_val | ↓ $best_dl / ↑ $best_ul ($dc_name)"
+    NODE_UPLINK_STATUS="$active_ping_val | ↓ $best_dl / ↑ $best_ul ($active_dc_name)"
   elif [[ "$best_dl" != "—" ]]; then
-    NODE_UPLINK_STATUS="$ping_val | ↓ $best_dl ($dc_name)"
+    NODE_UPLINK_STATUS="$active_ping_val | ↓ $best_dl ($active_dc_name)"
   else
-    NODE_UPLINK_STATUS="$ping_val ($dc_name)"
+    NODE_UPLINK_STATUS="$active_ping_val ($active_dc_name)"
   fi
 
   NODE_UPLINK_DL="$best_dl_num"
