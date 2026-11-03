@@ -2641,8 +2641,13 @@ measure_ru_iperf() {
 
 measure_ookla_speedtest() {
   local cc="${NODE_COUNTRY_CODE^^}"
-  # Для нод в РФ тест Ookla пропускается (Ookla заблокирована в РФ; замеры выполняются в Блоке 5)
+  # Для нод в РФ тест Ookla пропускается (Ookla заблокирована в РФ; замеры связности и скорости выполняются в Блоке 5)
   if [[ "$cc" == "RU" ]]; then
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      bold "4. 🚀 Тест скорости ноды (Speedtest by Ookla)"; printf "\n"
+      printf "  • Замер канала:     %s\n\n" "$(format_value "Пропущено (для нод в РФ замер выполняется в Блоке 5)")"
+    fi
+    NODE_UPLINK_STATUS="Skipped for RU nodes (tested in section 5)"
     return 0
   fi
 
@@ -2652,15 +2657,19 @@ measure_ookla_speedtest() {
 
   if [[ "$RUN_IPERF" != "true" ]]; then
     if [[ "$JSON_OUTPUT" != "true" ]]; then
-      printf "  • Скорость:         %s\n\n" "$(format_value "Пропущено (--no-iperf)")"
+      printf "  • Скорость:         %s\n\n" "$(format_value "Пропущено (--no-speedtest)")"
     fi
-    NODE_UPLINK_STATUS="Skipped (--no-iperf)"
+    NODE_UPLINK_STATUS="Skipped (--no-speedtest)"
     return 0
   fi
 
   local st_bin=""
   if is_command_available "speedtest"; then
-    st_bin="$(command -v speedtest)"
+    local check_v
+    check_v=$(speedtest --version 2>/dev/null || true)
+    if [[ "$check_v" =~ "Speedtest by Ookla"|"Ookla" ]]; then
+      st_bin="$(command -v speedtest)"
+    fi
   fi
 
   if [[ -z "$st_bin" ]]; then
@@ -2685,6 +2694,7 @@ measure_ookla_speedtest() {
       if curl -fsSL --connect-timeout 5 --max-time 15 "$url1" -o "$st_tgz" 2>/dev/null || \
          curl -fsSL --connect-timeout 5 --max-time 15 "$url2" -o "$st_tgz" 2>/dev/null; then
         tar -zxf "$st_tgz" -C "$st_dir" 2>/dev/null || true
+        chmod +x "$st_dir/speedtest" 2>/dev/null || true
         rm -f "$st_tgz" 2>/dev/null || true
         if [[ -x "$st_dir/speedtest" ]]; then
           st_bin="$st_dir/speedtest"
@@ -2703,7 +2713,9 @@ measure_ookla_speedtest() {
   fi
 
   local st_json="$TMP_WORK_DIR/speedtest_res.json"
+  local st_err="$TMP_WORK_DIR/speedtest.err"
   : > "$st_json"
+  : > "$st_err"
 
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
     if [[ -n "$COLOR_TABLE_VALUE" ]]; then
@@ -2713,7 +2725,7 @@ measure_ookla_speedtest() {
     fi
   fi
 
-  timeout 35 "$st_bin" --accept-license --accept-gdpr -f json > "$st_json" 2>&1 &
+  timeout 45 "$st_bin" --accept-license --accept-gdpr -p no -f json > "$st_json" 2> "$st_err" &
   local st_pid=$!
 
   local spinner=( "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏" )
@@ -2733,11 +2745,11 @@ measure_ookla_speedtest() {
   wait "$st_pid" 2>/dev/null || true
   progress_clear
 
-  local s_name s_country s_isp s_latency s_dl_bw s_ul_bw s_url is_ok=false
-  if [[ -s "$st_json" ]] && jq -e '.type == "result"' "$st_json" >/dev/null 2>&1; then
+  local s_location s_name s_country s_latency s_dl_bw s_ul_bw s_url is_ok=false
+  if [[ -s "$st_json" ]] && jq -e '.download.bandwidth and .ping.latency' "$st_json" >/dev/null 2>&1; then
+    s_location=$(jq -r '.server.location // ""' "$st_json" 2>/dev/null)
     s_name=$(jq -r '.server.name // ""' "$st_json" 2>/dev/null)
     s_country=$(jq -r '.server.country // ""' "$st_json" 2>/dev/null)
-    s_isp=$(jq -r '.server.sponsor // .isp // ""' "$st_json" 2>/dev/null)
     s_latency=$(jq -r '.ping.latency // "null"' "$st_json" 2>/dev/null)
     s_dl_bw=$(jq -r '.download.bandwidth // "0"' "$st_json" 2>/dev/null)
     s_ul_bw=$(jq -r '.upload.bandwidth // "0"' "$st_json" 2>/dev/null)
@@ -2755,8 +2767,16 @@ measure_ookla_speedtest() {
       lat_val="$(awk -v l="$s_latency" 'BEGIN { printf "%.1f ms", l }')"
     fi
 
-    local server_desc="$s_name"
-    [[ -n "$s_isp" ]] && server_desc="$server_desc ($s_isp)"
+    local server_desc=""
+    if [[ -n "$s_location" && -n "$s_name" && "$s_location" != "$s_name" ]]; then
+      server_desc="$s_location ($s_name)"
+    elif [[ -n "$s_location" ]]; then
+      server_desc="$s_location"
+    elif [[ -n "$s_name" ]]; then
+      server_desc="$s_name"
+    else
+      server_desc="Speedtest Server"
+    fi
     [[ -n "$s_country" ]] && server_desc="$server_desc, $s_country"
 
     local dl_bar ul_bar
@@ -2769,8 +2789,8 @@ measure_ookla_speedtest() {
     NODE_UPLINK_TARGET="$server_desc"
     NODE_UPLINK_PING="$lat_val"
     NODE_UPLINK_PING_NUM="$s_latency"
-    NODE_UPLINK_DL="$dl_str"
-    NODE_UPLINK_UL="$ul_str"
+    NODE_UPLINK_DL="$dl_mbps"
+    NODE_UPLINK_UL="$ul_mbps"
     NODE_UPLINK_STATUS="$lat_val | ↓ $dl_str / ↑ $ul_str ($server_desc)"
 
     if [[ "$JSON_OUTPUT" != "true" ]]; then
@@ -2786,7 +2806,7 @@ measure_ookla_speedtest() {
     fi
   else
     local err_msg
-    err_msg=$(jq -r '.message // empty' "$st_json" 2>/dev/null || cat "$st_json" 2>/dev/null | head -n 1)
+    err_msg=$(jq -r '.message // empty' "$st_json" 2>/dev/null || cat "$st_err" 2>/dev/null | head -n 1)
     [[ -z "$err_msg" ]] && err_msg="Тест скорости не удался"
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "  • Скорость:         %s\n\n" "$(format_value "$err_msg")"
