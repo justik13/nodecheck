@@ -65,6 +65,7 @@ NODE_UPLINK_DL="null"
 NODE_UPLINK_UL="null"
 SORTED_UPLINK_CANDIDATES=()
 SAVED_STTY=""
+INITIAL_STTY=""
 IPERF_SKIPPED=false
 
 NODE_CPU_MODEL=""
@@ -467,7 +468,31 @@ error_exit() {
   exit 1
 }
 
+restore_terminal() {
+  if [[ -n "${SAVED_STTY:-}" ]]; then
+    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || stty "$SAVED_STTY" 2>/dev/null || true
+    SAVED_STTY=""
+  fi
+  if [[ -n "${INITIAL_STTY:-}" ]]; then
+    stty "$INITIAL_STTY" < /dev/tty 2>/dev/null || stty "$INITIAL_STTY" 2>/dev/null || true
+  fi
+  stty echo icanon < /dev/tty 2>/dev/null || stty echo icanon 2>/dev/null || true
+  printf "\033[?25h" > /dev/tty 2>/dev/null || printf "\033[?25h" 2>/dev/null || true
+}
+
+enable_raw_terminal() {
+  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
+    if [[ -z "$SAVED_STTY" ]]; then
+      SAVED_STTY=$(stty -g < /dev/tty 2>/dev/null || stty -g 2>/dev/null || echo "")
+    fi
+    stty -icanon -echo < /dev/tty 2>/dev/null || stty -icanon -echo 2>/dev/null || true
+  fi
+}
+
 cleanup() {
+  # Always restore terminal mode unconditionally FIRST, even in subshells or on signal interruption
+  restore_terminal
+
   if [[ -n "${MAIN_PID:-}" && "$MAIN_PID" -ne "$BASHPID" ]]; then
     return 0
   fi
@@ -477,11 +502,6 @@ cleanup() {
 
   trap - EXIT INT TERM HUP QUIT
   progress_clear
-  printf "\033[?25h" 2>/dev/null || true
-  if [[ -n "$SAVED_STTY" ]]; then
-    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || stty "$SAVED_STTY" 2>/dev/null || true
-    SAVED_STTY=""
-  fi
   local pids
   pids=$(jobs -p 2>/dev/null)
   if [[ -n "$pids" ]]; then
@@ -2576,10 +2596,7 @@ measure_ru_iperf() {
   fi
 
   # Enable non-canonical mode if interactive terminal
-  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
-    SAVED_STTY=$(stty -g < /dev/tty 2>/dev/null || echo "")
-    stty -icanon -echo < /dev/tty 2>/dev/null || true
-  fi
+  enable_raw_terminal
 
   for srv_entry in "${RU_REGIONAL_SERVERS[@]}"; do
     IFS=$'\t' read -r region city provider host port_spec <<<"$srv_entry"
@@ -2605,10 +2622,7 @@ measure_ru_iperf() {
   done
 
   # Restore terminal stty settings
-  if [[ -n "$SAVED_STTY" ]]; then
-    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || stty "$SAVED_STTY" 2>/dev/null || true
-    SAVED_STTY=""
-  fi
+  restore_terminal
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if ! is_command_available "iperf3"; then
@@ -2769,10 +2783,7 @@ measure_ookla_speedtest() {
     return 0
   fi
 
-  if [[ -z "$SAVED_STTY" && "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
-    SAVED_STTY=$(stty -g < /dev/tty 2>/dev/null || echo "")
-    stty -icanon -echo < /dev/tty 2>/dev/null || true
-  fi
+  enable_raw_terminal
 
   if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
     while read -t 0.01 -n 1000 _ < /dev/tty 2>/dev/null; do :; done
@@ -2947,10 +2958,7 @@ measure_ookla_speedtest() {
     fi
   done
 
-  if [[ -n "$SAVED_STTY" ]]; then
-    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || stty "$SAVED_STTY" 2>/dev/null || true
-    SAVED_STTY=""
-  fi
+  restore_terminal
 
   NODE_UPLINK_DL="$best_dl_num"
   NODE_UPLINK_UL="$best_ul_num"
@@ -3458,6 +3466,9 @@ parse_arguments() {
 main() {
   MAIN_PID=$$
   export MAIN_PID
+  if [[ -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
+    INITIAL_STTY=$(stty -g < /dev/tty 2>/dev/null || stty -g 2>/dev/null || echo "")
+  fi
   CPU_STAT_START=$(head -n 1 /proc/stat 2>/dev/null || echo "")
 
   parse_arguments "$@"
