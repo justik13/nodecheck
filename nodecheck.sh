@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v3.8.1-ru
+# NodeCheck (RU Edition) v3.9.0-ru
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="3.8.1-ru"
+SCRIPT_VERSION="3.9.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -2637,347 +2637,161 @@ measure_ru_iperf() {
   fi
 }
 
-get_local_datacenter_candidates() {
-  local cc="${NODE_COUNTRY_CODE^^}"
-  case "$cc" in
-    "RU")
-      cat <<EOF
-Moscow, Hostkey 10G	spd-rudp.hostkey.ru	5201-5209
-Moscow, ER-Telecom 10G	st.msk.ertelecom.ru	5201-5209
-St. Petersburg, ER-Telecom 10G	st.spb.ertelecom.ru	5201-5209
-Frankfurt, Clouvider 10G	fra.speedtest.clouvider.net	5200-5209
-EOF
-      ;;
-    "US"|"CA")
-      cat <<EOF
-New York, Leaseweb 10G	speedtest.nyc1.us.leaseweb.net	5201-5210
-New York, Clouvider 10G	nyc.speedtest.clouvider.net	5200-5209
-Los Angeles, Clouvider 10G	la.speedtest.clouvider.net	5200-5209
-London, Clouvider 10G	lon.speedtest.clouvider.net	5200-5209
-EOF
-      ;;
-    "SG"|"HK"|"JP"|"KR"|"TW"|"AU"|"NZ"|"IN"|"TH"|"MY"|"VN"|"ID")
-      cat <<EOF
-Singapore, Leaseweb 10G	speedtest.sin1.sg.leaseweb.net	5201-5210
-Tokyo, Clouvider 10G	tyo.speedtest.clouvider.net	5200-5209
-Frankfurt, Clouvider 10G	fra.speedtest.clouvider.net	5200-5209
-EOF
-      ;;
-    *)
-      cat <<EOF
-Amsterdam, Eranium 100G	iperf-ams-nl.eranium.net	5201-5210
-Frankfurt, Clouvider 10G	fra.speedtest.clouvider.net	5200-5209
-London, Clouvider 10G	lon.speedtest.clouvider.net	5200-5209
-Amsterdam, Clouvider 10G	ams.speedtest.clouvider.net	5200-5209
-EOF
-      ;;
-  esac
-}
 
-measure_local_uplink_ping() {
-  local candidates=()
-  local line i pid
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && candidates+=( "$line" )
-  done < <(get_local_datacenter_candidates)
-
-  if (( ${#candidates[@]} == 0 )); then
-    return 1
-  fi
-
-  # Parallel ICMP latency measurement to candidate pool (Ookla-style Best Server selection)
-  local p_dir="${TMP_WORK_DIR:-/tmp}"
-  local pids=()
-  for i in "${!candidates[@]}"; do
-    local c_name c_host c_ports
-    IFS=$'\t' read -r c_name c_host c_ports <<< "${candidates[$i]}"
-    local p_file="$p_dir/cand_ping_${BASHPID}_${i}.txt"
-    ping_host "$c_host" "$p_file" &
-    pids+=( $! )
-  done
-  for pid in "${pids[@]}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-
-  # Rank candidates by lowest RTT
-  local scored_candidates=()
-  for i in "${!candidates[@]}"; do
-    local c_name c_host c_ports
-    IFS=$'\t' read -r c_name c_host c_ports <<< "${candidates[$i]}"
-    local p_file="$p_dir/cand_ping_${BASHPID}_${i}.txt"
-    local ping_val="N/A" ping_num="999999"
-    if [[ -f "$p_file" ]]; then
-      ping_val=$(read_val "$p_file" "N/A")
-      local num="${ping_val%% ms*}"
-      if [[ "$num" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        ping_num="$num"
-      fi
-      rm -f "$p_file" 2>/dev/null || true
-    fi
-    scored_candidates+=( "${ping_num}"$'\t'"${ping_val}"$'\t'"${candidates[$i]}" )
-  done
-
-  SORTED_UPLINK_CANDIDATES=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && SORTED_UPLINK_CANDIDATES+=( "$line" )
-  done < <(printf '%s\n' "${scored_candidates[@]}" | sort -n -t$'\t' -k1,1)
-
-  if (( ${#SORTED_UPLINK_CANDIDATES[@]} == 0 )); then
-    return 1
-  fi
-
-  # Pick the best server by lowest latency
-  local best_cand="${SORTED_UPLINK_CANDIDATES[0]}"
-  local best_rtt best_ping_val dc_name dc_host dc_port_spec
-  IFS=$'\t' read -r best_rtt best_ping_val dc_name dc_host dc_port_spec <<< "$best_cand"
-
-  NODE_UPLINK_TARGET="$dc_name"
-  NODE_UPLINK_HOST="$dc_host"
-  NODE_UPLINK_PORTSPEC="$dc_port_spec"
-  NODE_UPLINK_PING="$best_ping_val"
-  if [[ "$best_rtt" != "999999" ]]; then
-    NODE_UPLINK_PING_NUM="$best_rtt"
-  else
-    NODE_UPLINK_PING_NUM="null"
-  fi
-  NODE_UPLINK_DL="null"
-  NODE_UPLINK_UL="null"
-  NODE_UPLINK_STATUS="$best_ping_val ($dc_name)"
-  return 0
-}
 
 measure_ookla_speedtest() {
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    bold "4. 🚀 Тест скорости ноды (Speedtest by Ookla style)"; printf "\n"
-  fi
-
-  if (( ${#SORTED_UPLINK_CANDIDATES[@]} == 0 )); then
-    measure_local_uplink_ping || true
-  fi
-
-  local active_dc_name="${NODE_UPLINK_TARGET:-Amsterdam, Eranium 100G}"
-  local active_dc_host="${NODE_UPLINK_HOST:-iperf-ams-nl.eranium.net}"
-  local active_ping_val="${NODE_UPLINK_PING:-N/A}"
-  local active_ping_num="${NODE_UPLINK_PING_NUM:-null}"
-  local base_port="5201"
-  if [[ -n "$NODE_UPLINK_PORTSPEC" ]]; then
-    base_port="${NODE_UPLINK_PORTSPEC%%-*}"
-  fi
-
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    printf "  • Ближайший сервер: %s (автовыбор по RTT)\n" "$(bold "$active_dc_name")"
-    printf "  • Задержка (Ping):  %s\n" "$(format_value "$active_ping_val")"
-  fi
-
-  if [[ "$RUN_IPERF" != "true" || -z "$NODE_UPLINK_HOST" ]] || ! is_command_available "iperf3"; then
-    if [[ "$JSON_OUTPUT" != "true" ]]; then
-      if ! is_command_available "iperf3"; then
-        printf "  • Скорость:         %s\n\n" "$(format_value "iPerf3 не установлен (замер скорости пропущен)")"
-      else
-        printf "  • Скорость:         %s\n\n" "$(format_value "Пропущено (--no-iperf)")"
-      fi
-    fi
-    NODE_UPLINK_DL="null"
-    NODE_UPLINK_UL="null"
-    NODE_UPLINK_STATUS="$active_ping_val ($active_dc_name)"
+  local cc="${NODE_COUNTRY_CODE^^}"
+  # Для нод в РФ тест Ookla пропускается (Ookla заблокирована в РФ; замеры выполняются в Блоке 5)
+  if [[ "$cc" == "RU" ]]; then
     return 0
   fi
 
-  enable_raw_terminal
-
-  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
-    while read -t 0.01 -n 1000 _ < /dev/tty 2>/dev/null; do :; done
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    bold "4. 🚀 Тест скорости ноды (Speedtest by Ookla)"; printf "\n"
   fi
 
-  local test_time="${IPERF_TIME:-3}"
-  local streams="$IPERF_STREAMS"
-  if [[ -z "$streams" ]]; then
-    if (( NODE_CPU_CORES >= 2 )); then
-      streams=4
-    else
-      streams=2
+  if [[ "$RUN_IPERF" != "true" ]]; then
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "  • Скорость:         %s\n\n" "$(format_value "Пропущено (--no-iperf)")"
+    fi
+    NODE_UPLINK_STATUS="Skipped (--no-iperf)"
+    return 0
+  fi
+
+  local st_bin=""
+  if is_command_available "speedtest"; then
+    st_bin="$(command -v speedtest)"
+  fi
+
+  if [[ -z "$st_bin" ]]; then
+    local sysarch sys_bit=""
+    sysarch="$(uname -m 2>/dev/null || arch 2>/dev/null || echo "x86_64")"
+    case "$sysarch" in
+      x86_64|amd64) sys_bit="x86_64" ;;
+      aarch64|arm64|armv8*) sys_bit="aarch64" ;;
+      armv7*) sys_bit="armhf" ;;
+      i386|i686) sys_bit="i386" ;;
+      *) sys_bit="" ;;
+    esac
+
+    if [[ -n "$sys_bit" ]]; then
+      local st_dir="$TMP_WORK_DIR/speedtest_bin"
+      mkdir -p "$st_dir" 2>/dev/null || true
+      local st_tgz="$TMP_WORK_DIR/ookla_st.tgz"
+      local url1="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${sys_bit}.tgz"
+      local url2="https://dl.lamp.sh/files/ookla-speedtest-1.2.0-linux-${sys_bit}.tgz"
+
+      progress_status "Инициализация движка Speedtest CLI ($sys_bit)"
+      if curl -fsSL --connect-timeout 5 --max-time 15 "$url1" -o "$st_tgz" 2>/dev/null || \
+         curl -fsSL --connect-timeout 5 --max-time 15 "$url2" -o "$st_tgz" 2>/dev/null; then
+        tar -zxf "$st_tgz" -C "$st_dir" 2>/dev/null || true
+        rm -f "$st_tgz" 2>/dev/null || true
+        if [[ -x "$st_dir/speedtest" ]]; then
+          st_bin="$st_dir/speedtest"
+        fi
+      fi
+      progress_clear
     fi
   fi
 
-  local best_dl="—" best_ul="—"
-  local best_dl_num="null" best_ul_num="null"
-  local actual_port="$base_port"
-  local cand_entry p s
-  IPERF_SKIPPED=false
+  if [[ -z "$st_bin" || ! -x "$st_bin" ]]; then
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "  • Скорость:         %s\n\n" "$(format_value "Speedtest CLI недоступен")"
+    fi
+    NODE_UPLINK_STATUS="Speedtest CLI unavailable"
+    return 0
+  fi
 
-  # Show initial live indicator before testing
+  local st_json="$TMP_WORK_DIR/speedtest_res.json"
+  : > "$st_json"
+
   if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
     if [[ -n "$COLOR_TABLE_VALUE" ]]; then
-      printf "\r\033[2K  • Загрузка (Down):  \033[%sm↓ ...\033[0m\r" "$COLOR_TABLE_VALUE"
+      printf "  • Замер канала:     \033[%smПодключение к ближайшему серверу Ookla...\033[0m\r" "$COLOR_TABLE_VALUE"
     else
-      printf "\r\033[2K  • Загрузка (Down):  ↓ ...\r"
+      printf "  • Замер канала:     Подключение к ближайшему серверу Ookla...\r"
     fi
   fi
 
-  local cand_attempts=0
-  local cand_success=false
-  for cand_entry in "${SORTED_UPLINK_CANDIDATES[@]}"; do
-    ((cand_attempts++))
-    if (( cand_attempts > 2 )); then
-      break
-    fi
+  timeout 35 "$st_bin" --accept-license --accept-gdpr -f json > "$st_json" 2>&1 &
+  local st_pid=$!
 
-    local c_rtt c_pval c_name c_host c_portspec
-    IFS=$'\t' read -r c_rtt c_pval c_name c_host c_portspec <<< "$cand_entry"
-
-    active_dc_name="$c_name"
-    active_dc_host="$c_host"
-    active_ping_val="$c_pval"
-    if [[ "$c_rtt" != "999999" ]]; then
-      active_ping_num="$c_rtt"
-    else
-      active_ping_num="null"
-    fi
-
-    local ports=()
-    if [[ "$c_portspec" == "5200-5209" ]]; then
-      ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
-    elif [[ "$c_portspec" == "5201-5209" ]]; then
-      ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
-    elif [[ "$c_portspec" == "5201-5210" ]]; then
-      ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209 5210)
-    else
-      ports=("$c_portspec")
-    fi
-
-    local c_ip
-    c_ip=$(resolve_target_ip "$c_host")
-    [[ -z "$c_ip" ]] && continue
-    local port_attempts=0
-
-    for p in "${ports[@]}"; do
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
-        local user_key=""
-        if read -t 0.05 -n 1 user_key < /dev/tty 2>/dev/null; then
-          if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
-            IPERF_SKIPPED=true
-            break 2
-          fi
-        fi
-      fi
-
-      ((port_attempts++))
-      if (( port_attempts > 4 )); then
-        break
-      fi
-
-      # Fast TCP pre-check (2.0s) to skip closed or firewalled ports immediately
-      if ! timeout 2.0 bash -c "true > /dev/tcp/$c_ip/$p" 2>/dev/null; then
-        continue
-      fi
-
-      # 1. Download (Server -> Client, Reverse mode -R)
-      iperf_stream_test "$c_ip" "$p" "DL" "$test_time" "$streams" "$active_dc_name" "$c_pval" "" "OOKLA"
-      if [[ "$IPERF_SKIPPED" == "true" ]]; then
-        break 2
-      fi
-
-      # If single-port host was busy running another test, wait 1.5s and retry once
-      if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" && ${#ports[@]} -eq 1 ]]; then
-        sleep 1.5
-        iperf_stream_test "$c_ip" "$p" "DL" "$test_time" "$streams" "$active_dc_name" "$c_pval" "" "OOKLA"
-        if [[ "$IPERF_SKIPPED" == "true" ]]; then
-          break 2
-        fi
-      fi
-
-      if [[ "$IPERF_LAST_STATUS" -ne 0 ]]; then
-        continue
-      fi
-
-      best_dl="$IPERF_LAST_STR"
-      best_dl_num="$IPERF_LAST_NUM"
-      actual_port="$p"
-      cand_success=true
-      NODE_UPLINK_TARGET="$active_dc_name"
-      NODE_UPLINK_HOST="$active_dc_host"
-      NODE_UPLINK_PING="$active_ping_val"
-      NODE_UPLINK_PING_NUM="$active_ping_num"
-
-      if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
-        if [[ -n "$COLOR_TABLE_VALUE" ]]; then
-          printf "\r\033[2K  • Отдача (Up):      \033[%sm↑ ...\033[0m\r" "$COLOR_TABLE_VALUE"
-        else
-          printf "\r\033[2K  • Отдача (Up):      ↑ ...\r"
-        fi
-      fi
-
-      # Delay 0.8s with interactive keypress monitoring before Upload
-      for ((s=0; s<8; s++)); do
-        if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]]; then
-          local user_key=""
-          if read -t 0.1 -n 1 user_key < /dev/tty 2>/dev/null; then
-            if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
-              IPERF_SKIPPED=true
-              best_ul="Skipped"
-              break 2
-            fi
-          fi
-        else
-          sleep 0.1
-        fi
-      done
-      if [[ "$IPERF_SKIPPED" == "true" ]]; then
-        best_ul="Skipped"
-        break 2
-      fi
-
-      # 2. Upload (Client -> Server, Normal mode)
-      iperf_stream_test "$c_ip" "$p" "UL" "$test_time" "$streams" "$active_dc_name" "$c_pval" "$best_dl" "OOKLA"
-      if [[ "$IPERF_SKIPPED" == "true" ]]; then
-        best_ul="Skipped"
-        break 2
-      fi
-
-      if [[ "$IPERF_LAST_STATUS" -ne 0 && "$IPERF_SERVER_BUSY" == "true" && ${#ports[@]} -eq 1 ]]; then
-        sleep 1.5
-        iperf_stream_test "$c_ip" "$p" "UL" "$test_time" "$streams" "$active_dc_name" "$c_pval" "$best_dl" "OOKLA"
-        if [[ "$IPERF_SKIPPED" == "true" ]]; then
-          best_ul="Skipped"
-          break 2
-        fi
-      fi
-
-      if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
-        best_ul="$IPERF_LAST_STR"
-        best_ul_num="$IPERF_LAST_NUM"
+  local spinner=( "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏" )
+  local spin_idx=0
+  while kill -0 "$st_pid" 2>/dev/null; do
+    if [[ "$JSON_OUTPUT" != "true" && -t 1 ]]; then
+      local char="${spinner[$spin_idx]}"
+      if [[ -n "$COLOR_WARN" ]]; then
+        printf "\r\033[2K  • Замер канала:     \033[%sm%s\033[0m Автовыбор сервера, замер задержки, Download и Upload...\r" "$COLOR_WARN" "$char"
       else
-        best_ul="Blocked"
-        best_ul_num="Blocked"
+        printf "\r\033[2K  • Замер канала:     %s Автовыбор сервера, замер задержки, Download и Upload...\r" "$char"
       fi
-      break
-    done
-
-    if [[ "$cand_success" == "true" || "$IPERF_SKIPPED" == "true" ]]; then
-      break
+      spin_idx=$(( (spin_idx + 1) % ${#spinner[@]} ))
     fi
+    sleep 0.15
   done
+  wait "$st_pid" 2>/dev/null || true
+  progress_clear
 
-  restore_terminal
-
-  NODE_UPLINK_DL="$best_dl_num"
-  NODE_UPLINK_UL="$best_ul_num"
-  NODE_UPLINK_TARGET="$active_dc_name"
-  NODE_UPLINK_PING="$active_ping_val"
-  NODE_UPLINK_STATUS="$active_ping_val | ↓ $best_dl / ↑ $best_ul ($active_dc_name)"
-
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
-    if [[ "$IPERF_SKIPPED" == "true" ]]; then
-      if [[ "$best_dl" == "—" ]]; then
-        printf "  • Загрузка (Down):  %s\n" "$(format_value "Skipped")"
-      fi
-      if [[ "$best_ul" == "—" || "$best_ul" == "Skipped" ]]; then
-        printf "  • Отдача (Up):      %s\n" "$(format_value "Skipped")"
-      fi
-    elif [[ "$cand_success" != "true" ]]; then
-      printf "  • Скорость:         %s\n" "$(format_value "Unavailable")"
+  local s_name s_country s_isp s_latency s_dl_bw s_ul_bw s_url is_ok=false
+  if [[ -s "$st_json" ]] && jq -e '.type == "result"' "$st_json" >/dev/null 2>&1; then
+    s_name=$(jq -r '.server.name // ""' "$st_json" 2>/dev/null)
+    s_country=$(jq -r '.server.country // ""' "$st_json" 2>/dev/null)
+    s_isp=$(jq -r '.server.sponsor // .isp // ""' "$st_json" 2>/dev/null)
+    s_latency=$(jq -r '.ping.latency // "null"' "$st_json" 2>/dev/null)
+    s_dl_bw=$(jq -r '.download.bandwidth // "0"' "$st_json" 2>/dev/null)
+    s_ul_bw=$(jq -r '.upload.bandwidth // "0"' "$st_json" 2>/dev/null)
+    s_url=$(jq -r '.result.url // ""' "$st_json" 2>/dev/null)
+    if [[ -n "$s_latency" && "$s_latency" != "null" && "$s_dl_bw" != "0" ]]; then
+      is_ok=true
     fi
-    printf "\n"
+  fi
+
+  if [[ "$is_ok" == "true" ]]; then
+    local dl_mbps="0.0" ul_mbps="0.0" lat_val="N/A"
+    dl_mbps=$(awk -v b="$s_dl_bw" 'BEGIN { printf "%.1f", (b * 8) / 1000000 }')
+    ul_mbps=$(awk -v b="$s_ul_bw" 'BEGIN { printf "%.1f", (b * 8) / 1000000 }')
+    if [[ "$s_latency" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      lat_val="$(awk -v l="$s_latency" 'BEGIN { printf "%.1f ms", l }')"
+    fi
+
+    local server_desc="$s_name"
+    [[ -n "$s_isp" ]] && server_desc="$server_desc ($s_isp)"
+    [[ -n "$s_country" ]] && server_desc="$server_desc, $s_country"
+
+    local dl_bar ul_bar
+    dl_bar=$(render_speed_bar "$dl_mbps" 1000 6)
+    ul_bar=$(render_speed_bar "$ul_mbps" 1000 6)
+
+    local dl_str="${dl_mbps} Mbps"
+    local ul_str="${ul_mbps} Mbps"
+
+    NODE_UPLINK_TARGET="$server_desc"
+    NODE_UPLINK_PING="$lat_val"
+    NODE_UPLINK_PING_NUM="$s_latency"
+    NODE_UPLINK_DL="$dl_str"
+    NODE_UPLINK_UL="$ul_str"
+    NODE_UPLINK_STATUS="$lat_val | ↓ $dl_str / ↑ $ul_str ($server_desc)"
+
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "  • Ближайший сервер: %s (автовыбор)\n" "$(bold "$server_desc")"
+      printf "  • Задержка (Ping):  %s\n" "$(format_value "$lat_val")"
+      if [[ -n "$COLOR_TABLE_VALUE" ]]; then
+        printf "  • Загрузка (Down):  \033[%sm↓\033[0m %s %s\n" "$COLOR_TABLE_VALUE" "$dl_bar" "$(format_value "$dl_str")"
+        printf "  • Отдача (Up):      \033[%sm↑\033[0m %s %s\n\n" "$COLOR_TABLE_VALUE" "$ul_bar" "$(format_value "$ul_str")"
+      else
+        printf "  • Загрузка (Down):  ↓ %s %s\n" "$dl_bar" "$dl_str"
+        printf "  • Отдача (Up):      ↑ %s %s\n\n" "$ul_bar" "$ul_str"
+      fi
+    fi
+  else
+    local err_msg
+    err_msg=$(jq -r '.message // empty' "$st_json" 2>/dev/null || cat "$st_json" 2>/dev/null | head -n 1)
+    [[ -z "$err_msg" ]] && err_msg="Тест скорости не удался"
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "  • Скорость:         %s\n\n" "$(format_value "$err_msg")"
+    fi
+    NODE_UPLINK_STATUS="$err_msg"
   fi
   return 0
 }
@@ -3326,7 +3140,7 @@ NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит 
   -6, --ipv6               Принудительно использовать только IPv6
   -j, --json               Вывод результатов в чистом формате JSON
   -s, --streams ЧИСЛО      Число параллельных потоков iPerf3 (по умолч.: 2 для 1 vCPU, 4 для 2+ vCPU)
-  --no-iperf               Пропустить замер скорости iPerf3 (только пинг)
+  --no-iperf, --no-speedtest  Пропустить замер скорости (только пинг)
   --iperf-all              Замер скорости iPerf3 по всем 7 регионам РФ (по умолчанию включен)
   --full-iperf             Расширенный тест iPerf3 (по 10с на прием и отдачу)
   --iperf-time СЕК         Время замера iPerf3 на прием и отдачу (по умолч.: 3с)
@@ -3399,7 +3213,7 @@ parse_arguments() {
         IPERF_STREAMS="$2"
         shift 2
         ;;
-      --no-iperf)
+      --no-iperf|--no-speedtest)
         RUN_IPERF=false
         shift
         ;;
