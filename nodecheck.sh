@@ -75,6 +75,10 @@ NODE_UPTIME=""
 NODE_OS=""
 NODE_RAM=""
 NODE_DISK=""
+NODE_DISK_TYPE="SSD"
+NODE_DISK_IO=""
+NODE_DISK_IO_NUM="null"
+RUN_DISK_IO=true
 NODE_CPU_STEAL="0.0%"
 NODE_CPU_STEAL_NUM="0.0"
 NODE_CPU_STEAL_ALLTIME="0.0"
@@ -994,6 +998,104 @@ get_vpn_node_info() {
 # 0. System Hardware & Virtualization Specs (CPU Steal, RAM, Disk, Uptime)
 # ------------------------------------------------------------------------------
 
+get_disk_type() {
+  local root_dev base_dev=""
+  root_dev=$(df -P / 2>/dev/null | awk 'END {print $1}')
+  if [[ -n "$root_dev" && "$root_dev" == /dev/* ]]; then
+    base_dev=$(basename "$root_dev")
+    if [[ "$base_dev" =~ ^nvme[0-9]+n[0-9]+ ]]; then
+      base_dev="${BASH_REMATCH[0]}"
+    elif [[ "$base_dev" =~ ^[a-z]+[0-9]+$ ]]; then
+      base_dev="${base_dev%%[0-9]*}"
+    elif [[ "$base_dev" =~ ^[a-z]+ ]]; then
+      base_dev="${BASH_REMATCH[0]}"
+    fi
+  fi
+
+  local is_rotational=""
+  if [[ -n "$base_dev" && -r "/sys/block/$base_dev/queue/rotational" ]]; then
+    is_rotational=$(cat "/sys/block/$base_dev/queue/rotational" 2>/dev/null)
+  fi
+
+  if [[ "$base_dev" == nvme* ]]; then
+    echo "NVMe SSD"
+  elif [[ "$is_rotational" == "0" ]]; then
+    echo "SSD"
+  elif [[ "$is_rotational" == "1" ]]; then
+    echo "HDD"
+  elif [[ "$base_dev" == vd* ]]; then
+    echo "SSD"
+  else
+    echo "SSD"
+  fi
+}
+
+measure_disk_io() {
+  if [[ "$RUN_DISK_IO" != "true" ]]; then
+    NODE_DISK_IO="Skipped (--no-io)"
+    NODE_DISK_IO_NUM="null"
+    return 0
+  fi
+
+  if ! is_command_available "dd" || ! is_command_available "df"; then
+    NODE_DISK_IO="N/A"
+    NODE_DISK_IO_NUM="null"
+    return 0
+  fi
+
+  local target_dir="${TMP_WORK_DIR:-/tmp}"
+  if [[ ! -d "$target_dir" || ! -w "$target_dir" ]]; then
+    NODE_DISK_IO="N/A"
+    NODE_DISK_IO_NUM="null"
+    return 0
+  fi
+
+  # 1. Protection: Check free space in MB (abort if < 2 GB free)
+  local freespace_mb
+  freespace_mb=$(df -m -P "$target_dir" 2>/dev/null | awk 'END {print $4}')
+  if [[ -z "$freespace_mb" || ! "$freespace_mb" =~ ^[0-9]+$ ]] || (( freespace_mb < 2048 )); then
+    NODE_DISK_IO="Skipped (< 2 GB free)"
+    NODE_DISK_IO_NUM="null"
+    return 0
+  fi
+
+  # 2. Protection: Check disk usage percentage (abort if >= 90% full)
+  local used_pct
+  used_pct=$(df -P "$target_dir" 2>/dev/null | awk 'END {sub(/%/, "", $5); print $5}')
+  if [[ "$used_pct" =~ ^[0-9]+$ ]] && (( used_pct >= 90 )); then
+    NODE_DISK_IO="Skipped (> 90% full)"
+    NODE_DISK_IO_NUM="null"
+    return 0
+  fi
+
+  # 3. Maximum-protection single-run test: write 256 MB with fdatasync
+  local test_file="$target_dir/disk_bench_$$.tmp"
+  local dd_out=""
+  dd_out=$(timeout 8 dd if=/dev/zero of="$test_file" bs=1M count=256 conv=fdatasync 2>&1 || true)
+  rm -f "$test_file" 2>/dev/null || true
+
+  local speed_str=""
+  speed_str=$(awk -F '[,，]' '/copied|скопирован/ {print $NF}' <<<"$dd_out" | sed 's/^[ \t]*//;s/[ \t]*$//' | head -n 1)
+  if [[ -z "$speed_str" ]]; then
+    speed_str=$(grep -E '/s' <<<"$dd_out" | awk '{print $(NF-1)" "$NF}' | tail -n 1)
+  fi
+
+  if [[ -n "$speed_str" && "$speed_str" == *"/s" ]]; then
+    local num_part="${speed_str%% *}"
+    local speed_num=""
+    if [[ "$speed_str" == *"GB/s"* || "$speed_str" == *"GiB/s"* ]]; then
+      speed_num=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n * 1024 }')
+    else
+      speed_num=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n }')
+    fi
+    NODE_DISK_IO="$speed_str"
+    NODE_DISK_IO_NUM="$speed_num"
+  else
+    NODE_DISK_IO="N/A"
+    NODE_DISK_IO_NUM="null"
+  fi
+}
+
 get_system_specs() {
   # 1. CPU Model & Cores (x86_64, aarch64 / ARM fallback)
   local cpu_model=""
@@ -1075,6 +1177,8 @@ get_system_specs() {
   else
     NODE_DISK="N/A"
   fi
+  NODE_DISK_TYPE=$(get_disk_type)
+  measure_disk_io
 
   # 5. CPU Steal measurement (Zero-sleep delta from start + all-time uptime ticks)
   # Exclude double counting of guest and guest_nice (already part of user and nice)
@@ -1363,6 +1467,12 @@ lookup_twitter_x() {
 lookup_rutracker() {
   local code
   code=$(curl_http_code "https://rutracker.org")
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+}
+
+lookup_amnezia() {
+  local code
+  code=$(curl_http_code "https://amnezia.org")
   if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
 }
 
@@ -1812,6 +1922,7 @@ run_services_check() {
     "lookup_youtube_premium" "$s_dir/youtube_premium"
     "lookup_youtube_music" "$s_dir/youtube_music"
     "lookup_rutracker" "$s_dir/rutracker"
+    "lookup_amnezia" "$s_dir/amnezia"
     "lookup_spotify_signup" "$s_dir/spotify"
     "lookup_netflix" "$s_dir/netflix"
     "lookup_steam" "$s_dir/steam"
@@ -1877,6 +1988,7 @@ run_services_check() {
   ARR_RU_UNBLOCK+=( "YouTube Premium"$'\t'"$(read_val "$s_dir/youtube_premium" "No")" )
   ARR_RU_UNBLOCK+=( "YouTube Music"$'\t'"$(read_val "$s_dir/youtube_music" "No")" )
   ARR_RU_UNBLOCK+=( "Rutracker"$'\t'"$(read_val "$s_dir/rutracker" "No")" )
+  ARR_RU_UNBLOCK+=( "Amnezia VPN (amnezia.org)"$'\t'"$(read_val "$s_dir/amnezia" "No")" )
   ARR_RU_UNBLOCK+=( "Spotify Signup"$'\t'"$(read_val "$s_dir/spotify" "No")" )
   ARR_RU_UNBLOCK+=( "Netflix"$'\t'"$(read_val "$s_dir/netflix" "No")" )
   ARR_RU_UNBLOCK+=( "Steam Store (Игры)"$'\t'"$(read_val "$s_dir/steam" "No")" )
@@ -2881,7 +2993,22 @@ print_header() {
     echo -e " Платформа:\t$(bold "${NODE_VIRT^^}") | Аптайм: $(bold "$NODE_UPTIME")"
     echo -e " Процессор (CPU):\t$(bold "$NODE_CPU_MODEL") (${NODE_CPU_CORES} vCPU)"
     echo -e " CPU Steal:\t$(color "$NODE_CPU_STEAL_COLOR" "$NODE_CPU_STEAL")"
-    echo -e " Память / Диск:\tRAM: $(bold "$NODE_RAM") | Диск: $(bold "$NODE_DISK")"
+    local disk_info="$NODE_DISK"
+    local disk_extra=()
+    [[ -n "$NODE_DISK_TYPE" && "$NODE_DISK_TYPE" != "N/A" ]] && disk_extra+=("$NODE_DISK_TYPE")
+    if [[ -n "$NODE_DISK_IO" && "$NODE_DISK_IO" != "N/A" ]]; then
+      if [[ "$NODE_DISK_IO" == *"Skipped"* ]]; then
+        disk_extra+=("$NODE_DISK_IO")
+      else
+        disk_extra+=("I/O: $NODE_DISK_IO")
+      fi
+    fi
+    if (( ${#disk_extra[@]} > 0 )); then
+      local disk_extra_joined
+      disk_extra_joined=$(IFS=', '; echo "${disk_extra[*]}")
+      disk_info="$disk_info [$disk_extra_joined]"
+    fi
+    echo -e " Память / Диск:\tRAM: $(bold "$NODE_RAM") | Диск: $(bold "$disk_info")"
     echo -e " Тип хоста:\t$(bold "$NODE_TYPE")"
     echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
@@ -3062,6 +3189,9 @@ build_json() {
     --arg cpu_steal_alltime "${NODE_CPU_STEAL_ALLTIME:-0.00}" \
     --arg ram "${NODE_RAM:-}" \
     --arg disk "${NODE_DISK:-}" \
+    --arg disk_type "${NODE_DISK_TYPE:-}" \
+    --arg disk_io "${NODE_DISK_IO:-}" \
+    --arg disk_io_num "${NODE_DISK_IO_NUM:-null}" \
     --arg country "${NODE_COUNTRY_CODE:-}" \
     --arg city "${NODE_CITY:-}" \
     --arg asn "${NODE_ASN:-}" \
@@ -3095,7 +3225,10 @@ build_json() {
         cpu_steal_pct: ($cpu_steal | try tonumber catch 0.0),
         cpu_steal_all_time_pct: ($cpu_steal_alltime | try tonumber catch 0.00),
         ram: $ram,
-        disk: $disk
+        disk: $disk,
+        disk_type: (if $disk_type != "" then $disk_type else null end),
+        disk_io_write_speed: (if $disk_io != "" and $disk_io != "N/A" then $disk_io else null end),
+        disk_io_write_mbps: (if $disk_io_num != "" and $disk_io_num != "null" and $disk_io_num != "N/A" then ($disk_io_num | try tonumber catch null) else null end)
       },
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
@@ -3161,6 +3294,7 @@ NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит 
   -j, --json               Вывод результатов в чистом формате JSON
   -s, --streams ЧИСЛО      Число параллельных потоков iPerf3 (по умолч.: 2 для 1 vCPU, 4 для 2+ vCPU)
   --no-iperf, --no-speedtest  Пропустить замер скорости (только пинг)
+  --no-io, --no-disk-bench Пропустить тест скорости диска (I/O)
   --iperf-all              Замер скорости iPerf3 по всем 7 регионам РФ (по умолчанию включен)
   --full-iperf             Расширенный тест iPerf3 (по 10с на прием и отдачу)
   --iperf-time СЕК         Время замера iPerf3 на прием и отдачу (по умолч.: 3с)
@@ -3235,6 +3369,10 @@ parse_arguments() {
         ;;
       --no-iperf|--no-speedtest)
         RUN_IPERF=false
+        shift
+        ;;
+      --no-io|--no-disk-bench)
+        RUN_DISK_IO=false
         shift
         ;;
       --install-deps)
