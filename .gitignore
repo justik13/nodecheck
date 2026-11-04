@@ -2,8 +2,14 @@
 GEMINI.md
 .gemini/
 
-# Temporary & debug files
+# Temporary, data & history files
 *.tmp
 *.log
+*.json
+*.tgz
+*.tar.gz
+.env*
+history*
+tg*
 .DS_Store
 Thumbs.db
