@@ -36,6 +36,7 @@ IPERF_TIME_DL="$IPERF_TIME"
 IPERF_TIME_UL="$IPERF_TIME"
 IPERF_STREAMS=""
 INSTALL_DEPS=false
+SHOW_FULL_IP=false
 
 EXTERNAL_IPV4=""
 EXTERNAL_IPV6=""
@@ -778,6 +779,43 @@ discover_external_ips() {
       fi
     done
   fi
+}
+
+mask_ipv4() {
+  local ip="$1"
+  local a b c d
+  local IFS=.
+  read -r a b c d <<< "$ip"
+  if [[ -n "$a" && -n "$b" && -n "$c" && -n "$d" ]]; then
+    echo "${a}.${b}.*.*"
+  else
+    echo "$ip"
+  fi
+}
+
+mask_ipv6() {
+  local ip="$1"
+  [[ -z "$ip" ]] && return 0
+  if [[ "$ip" != *:* ]]; then
+    echo "$ip"
+    return 0
+  fi
+  local expanded="$ip"
+  if [[ "$expanded" == *"::"* ]]; then
+    local left="${expanded%%::*}"
+    local right="${expanded#*::}"
+    local left_count=0 right_count=0
+    [[ -n "$left" ]] && { IFS=: read -r -a l_arr <<< "$left"; left_count=${#l_arr[@]}; }
+    [[ -n "$right" ]] && { IFS=: read -r -a r_arr <<< "$right"; right_count=${#r_arr[@]}; }
+    local missing=$(( 8 - left_count - right_count ))
+    local mid=""
+    for (( i=0; i<missing; i++ )); do mid="${mid}0:"; done
+    expanded="${left:+${left}:}${mid}${right}"
+    expanded="${expanded%:}"
+  fi
+  local h1 h2 h3 rest
+  IFS=: read -r h1 h2 h3 rest <<< "$expanded"
+  echo "${h1:-0}:${h2:-0}:${h3:-0}:*:*:*:*:*"
 }
 
 get_vpn_node_info() {
@@ -3389,13 +3427,20 @@ print_header() {
     printf "└%s┘\n" "$(printf '%0.s─' {1..78})"
   fi
   {
-    if [[ -n "$EXTERNAL_IPV4" ]]; then
-      echo -e " IPv4:\t$(bold "$EXTERNAL_IPV4")"
+    local display_v4="$EXTERNAL_IPV4"
+    local display_v6="$EXTERNAL_IPV6"
+    if [[ "$SHOW_FULL_IP" != "true" ]]; then
+      [[ -n "$display_v4" ]] && display_v4="$(mask_ipv4 "$display_v4")"
+      [[ -n "$display_v6" ]] && display_v6="$(mask_ipv6 "$display_v6")"
+    fi
+
+    if [[ -n "$display_v4" ]]; then
+      echo -e " IPv4:\t$(bold "$display_v4")"
     else
       echo -e " IPv4:\t$(color "$COLOR_NULL" "None (Not configured)")"
     fi
-    if [[ -n "$EXTERNAL_IPV6" ]]; then
-      echo -e " IPv6:\t$(bold "$EXTERNAL_IPV6")"
+    if [[ -n "$display_v6" ]]; then
+      echo -e " IPv6:\t$(bold "$display_v6")"
     else
       echo -e " IPv6:\t$(color "$COLOR_NULL" "None (Not configured)")"
     fi
@@ -3612,9 +3657,16 @@ build_json() {
   local_lines=$(printf "%s\n" "${ARR_RU_LOCAL[@]}")
   conn_lines=$(printf "%s\n" "${ARR_CONNECTIVITY[@]}")
 
+  local json_v4="$EXTERNAL_IPV4"
+  local json_v6="$EXTERNAL_IPV6"
+  if [[ "$SHOW_FULL_IP" != "true" ]]; then
+    [[ -n "$json_v4" ]] && json_v4="$(mask_ipv4 "$json_v4")"
+    [[ -n "$json_v6" ]] && json_v6="$(mask_ipv6 "$json_v6")"
+  fi
+
   RESULT_JSON=$(jq -n \
-    --arg ip "${EXTERNAL_IPV4:-}" \
-    --arg ipv6 "${EXTERNAL_IPV6:-}" \
+    --arg ip "${json_v4:-}" \
+    --arg ipv6 "${json_v6:-}" \
     --arg os "${NODE_OS:-}" \
     --arg virt "${NODE_VIRT:-}" \
     --arg uptime "${NODE_UPTIME:-}" \
@@ -3765,6 +3817,7 @@ NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит 
 
 Опции:
   -h, --help               Показать эту справку и выйти
+  -f, --full-ip            Отображать полный IP без маскирования (по умолч.: скрыт *.*)
   -4, --ipv4               Принудительно использовать только IPv4
   -6, --ipv6               Принудительно использовать только IPv6
   -j, --json               Вывод результатов в чистом формате JSON
@@ -3816,6 +3869,10 @@ parse_arguments() {
       -h|--help)
         display_help
         exit 0
+        ;;
+      -f|--full-ip)
+        SHOW_FULL_IP=true
+        shift
         ;;
       -4|--ipv4)
         IPV4_ONLY=true

@@ -92,7 +92,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │ NodeCheck (RU Edition) - Node & Network Quality Auditor v3.9.0-ru            │
 └──────────────────────────────────────────────────────────────────────────────┘
- IPv4:              198.51.100.24
+ IPv4:              198.51.*.*
  IPv6:              None (Not configured)
  Локация / ASN:     PL (Warsaw) — AS12345 (Hosting Provider Ltd)
  ОС и ядро:         Ubuntu 24.04.4 LTS (6.8.0-111-generic x86_64)
@@ -199,6 +199,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 | Опция | Описание |
 | :--- | :--- |
 | `-h`, `--help` | Показать справку по всем опциям |
+| `-f`, `--full-ip` | Отображать полный IP без маскирования (по умолчанию скрыт: `*.*`) |
 | `-4`, `--ipv4` | Принудительно тестировать только IPv4 стек |
 | `-6`, `--ipv6` | Принудительно тестировать только IPv6 стек |
 | `-j`, `--json` | Вывод полного отчёта в чистом формате JSON |
