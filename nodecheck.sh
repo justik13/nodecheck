@@ -815,7 +815,7 @@ mask_ipv6() {
     [[ -n "$left" ]] && { IFS=: read -r -a l_arr <<< "$left"; left_count=${#l_arr[@]}; }
     [[ -n "$right" ]] && { IFS=: read -r -a r_arr <<< "$right"; right_count=${#r_arr[@]}; }
     local missing=$(( 8 - left_count - right_count ))
-    local mid=""
+    local mid="" i
     for (( i=0; i<missing; i++ )); do mid="${mid}0:"; done
     expanded="${left:+${left}:}${mid}${right}"
     expanded="${expanded%:}"
@@ -934,8 +934,18 @@ get_vpn_node_info() {
     actual_cc=$(jq -r '.Country.IsoCode // empty' "$checkplace_file" 2>/dev/null)
     reg_cc=$(jq -r '.Country.RegisteredCountry.IsoCode // empty' "$checkplace_file" 2>/dev/null)
   fi
+  # Fallback to RIR RDAP if checkplace did not return registered country
+  if [[ -z "$reg_cc" || "$reg_cc" == "null" ]] && [[ -n "$primary_ip" ]]; then
+    local rdap_raw
+    rdap_raw=$(curl_wrapper GET "https://rdap.db.ripe.net/ip/${primary_ip}" "${ip_ver_arg[@]}" --timeout 3 2>/dev/null)
+    reg_cc=$(jq -r '.country // empty' <<<"$rdap_raw" 2>/dev/null)
+    if [[ -z "$reg_cc" ]]; then
+      rdap_raw=$(curl_wrapper GET "https://rdap.arin.net/registry/ip/${primary_ip}" "${ip_ver_arg[@]}" --timeout 3 2>/dev/null)
+      reg_cc=$(jq -r '.country // empty' <<<"$rdap_raw" 2>/dev/null)
+    fi
+  fi
   NODE_RIR_REG_COUNTRY="${reg_cc^^}"
-  if [[ -n "$NODE_RIR_REG_COUNTRY" && "$NODE_RIR_REG_COUNTRY" != "NULL" ]]; then
+  if [[ -n "$NODE_RIR_REG_COUNTRY" && "$NODE_RIR_REG_COUNTRY" != "NULL" && "$NODE_RIR_REG_COUNTRY" =~ ^[A-Z]{2}$ ]]; then
     if [[ "$NODE_RIR_REG_COUNTRY" == "${NODE_COUNTRY_CODE^^}" ]]; then
       NODE_IP_NATIVE="Native (Geo-consistent)"
       NODE_IP_NATIVE_COLOR="$COLOR_SUCCESS"
@@ -944,8 +954,9 @@ get_vpn_node_info() {
       NODE_IP_NATIVE_COLOR="$COLOR_WARN"
     fi
   else
-    NODE_IP_NATIVE="Native (Geo-consistent)"
-    NODE_IP_NATIVE_COLOR="$COLOR_SUCCESS"
+    NODE_RIR_REG_COUNTRY=""
+    NODE_IP_NATIVE="N/A (Unverified)"
+    NODE_IP_NATIVE_COLOR="$COLOR_NULL"
   fi
 
   local scam_score="" scam_risk="" scam_vpn=false scam_dc=false scam_tor=false
@@ -1953,7 +1964,7 @@ lookup_amnezia() {
 
 lookup_chatgpt() {
   local ip_ver_arg=()
-  if [[ "$IPV6_ONLY" == "true" ]]; then
+  if [[ "$IPV6_ONLY" == "true" || ( -z "$EXTERNAL_IPV4" && "$IPV4_SUPPORTED" -eq 0 ) ]]; then
     ip_ver_arg=(--ip-version "6")
   elif [[ "$IPV4_ONLY" == "true" ]]; then
     ip_ver_arg=(--ip-version "4")
@@ -1975,11 +1986,7 @@ lookup_chatgpt() {
   else
     local code
     code=$(curl_http_code "https://chatgpt.com")
-    if [[ "$code" =~ ^(200|301|302)$ ]]; then
-      echo "Yes"
-    else
-      echo "No ($code)"
-    fi
+    format_unblock_status "$code"
   fi
 }
 
@@ -2008,7 +2015,7 @@ lookup_gemini() {
   if [[ -z "$g_cc" ]]; then
     local code
     code=$(curl_http_code "https://gemini.google.com")
-    if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+    format_unblock_status "$code"
     return
   fi
 
@@ -2024,7 +2031,7 @@ lookup_gemini() {
     if [[ "$direct_code" =~ ^(200|301|302)$ ]]; then
       echo "Yes ($g_cc)"
     else
-      echo "No ($direct_code)"
+      format_unblock_status "$direct_code"
     fi
     return
   fi
@@ -2073,7 +2080,7 @@ lookup_youtube() {
   local code resp cc=""
   code=$(curl_http_code "https://www.youtube.com")
   if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
-    echo "No ($code)"
+    format_unblock_status "$code"
     return
   fi
 
@@ -2491,6 +2498,11 @@ run_services_check() {
 
 resolve_target_ip() {
   local target_host="$1"
+  [[ -z "$target_host" ]] && return 0
+  if [[ "$target_host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$target_host" =~ : ]]; then
+    echo "$target_host"
+    return 0
+  fi
   local resolved_ip=""
   if [[ "$IPV6_ONLY" == "true" ]] || [[ "$IPV4_SUPPORTED" -ne 1 && "$IPV6_SUPPORTED" -eq 1 ]]; then
     if is_command_available "getent"; then
@@ -2503,21 +2515,25 @@ resolve_target_ip() {
   fi
   if [[ -n "$resolved_ip" ]]; then
     echo "$resolved_ip"
-  else
+  elif ! is_command_available "getent"; then
     echo "$target_host"
   fi
 }
 
 ping_host() {
   local host="$1" out_file="$2"
+  local target_ip
+  target_ip=$(resolve_target_ip "$host")
+  if [[ -z "$target_ip" ]]; then
+    printf "N/A" > "$out_file"
+    return 0
+  fi
   local ping_flags=()
   if [[ "$IPV4_ONLY" == "true" ]] || [[ "$IPV6_SUPPORTED" -eq 0 ]]; then
     ping_flags+=(-4)
   elif [[ "$IPV6_ONLY" == "true" ]] || [[ "$IPV4_SUPPORTED" -eq 0 && "$IPV6_SUPPORTED" -eq 1 ]]; then
     ping_flags+=(-6)
   fi
-  local target_ip
-  target_ip=$(resolve_target_ip "$host")
   local p
   p=$(LC_ALL=C ping "${ping_flags[@]}" -c 2 -W 2 "$target_ip" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
   if [[ -n "$p" && "$p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
@@ -3168,7 +3184,7 @@ measure_ru_pings() {
     IFS=$'\t' read -r _ _ _ host _ <<<"$srv"
     if [[ ! -f "$p_dir/$host" ]]; then
       touch "$p_dir/$host"
-      ( ping_host "$host" "$p_dir/$host" ) &
+      ping_host "$host" "$p_dir/$host" &
     fi
   done
   wait
@@ -3233,7 +3249,7 @@ measure_ru_iperf() {
 
 measure_ookla_speedtest() {
   local cc="${NODE_COUNTRY_CODE^^}"
-  if [[ "$IPV6_ONLY" == "true" ]]; then
+  if [[ "$IPV6_ONLY" == "true" || ( -z "$EXTERNAL_IPV4" && "$IPV4_SUPPORTED" -eq 0 ) ]]; then
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       bold "4. 🚀 Тест скорости ноды (Speedtest by Ookla)"; printf "\n"
       printf "  • Замер канала:     %s\n\n" "$(format_value "Пропущено (Ookla Speedtest требует IPv4)")"
@@ -3784,7 +3800,7 @@ build_json() {
       quality: {
         host_type: $host_type,
         ip_type: (if $ip_type != "" then $ip_type else null end),
-        registered_country: (if $reg_country != "" then $reg_country else null end),
+        registered_country: (if $reg_country != "" and $reg_country != "null" and $reg_country != "NULL" and $reg_country != "N/A" then $reg_country else null end),
         risk: $risk,
         risk_score_max: (if $risk_max != "" and $risk_max != "null" then ($risk_max | try tonumber catch null) else null end),
         scamalytics_score: (if $scam_score != "" and $scam_score != "null" then ($scam_score | try tonumber catch null) else null end),
