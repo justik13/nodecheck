@@ -29,6 +29,7 @@ INTERFACE_NAME=""
 CUSTOM_DOH_PROVIDER=""
 RUN_IPERF=true
 RUN_IPERF_ALL=true
+RUN_SPEEDTEST=true
 RUN_FULL_IPERF=false
 IPERF_TIME=3
 IPERF_TIME_DL="$IPERF_TIME"
@@ -47,11 +48,21 @@ NODE_CITY=""
 NODE_COUNTRY_CODE=""
 NODE_TYPE=""
 NODE_RISK=""
+NODE_RISK_MAX_NUM=""
+NODE_SCAM_SCORE=""
+NODE_ABUSE_SCORE=""
+NODE_ABUSE_REPORTS="0"
+NODE_IPQUERY_SCORE=""
 NODE_RISK_COLOR="0;90"
 NODE_CAPTCHA_STATUS=""
 NODE_CAPTCHA_COLOR="0;90"
 NODE_RKN_STATUS="Checking..."
 NODE_RKN_COLOR="0;90"
+NODE_DNSBL_STATUS="Checking..."
+NODE_DNSBL_COLOR="0;90"
+NODE_DNSBL_TOTAL=0
+NODE_DNSBL_LISTED=0
+NODE_DNSBL_ZONES=""
 NODE_BBR_STATUS=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
@@ -78,7 +89,19 @@ NODE_DISK=""
 NODE_DISK_TYPE="SSD"
 NODE_DISK_IO=""
 NODE_DISK_IO_NUM="null"
+NODE_DISK_IO_STATUS="pending"
+NODE_DISK_IO_MSG=""
+NODE_DISK_IO_4K="N/A"
+NODE_DISK_IO_4K_NUM="null"
 RUN_DISK_IO=true
+DISK_IO_EXPLICIT=false
+NODE_AES_HARDWARE=false
+NODE_AES_TYPE="none"
+NODE_AES_STATUS="Disabled (Soft)"
+NODE_AES_COLOR="0;31"
+NODE_CRYPTO_SPEED="N/A"
+NODE_CRYPTO_SPEED_MB_S="null"
+RUN_CRYPTO_BENCH=true
 NODE_CPU_STEAL="0.0%"
 NODE_CPU_STEAL_NUM="0.0"
 NODE_CPU_STEAL_ALLTIME="0.0"
@@ -473,23 +496,27 @@ error_exit() {
 }
 
 restore_terminal() {
-  if [[ -n "${SAVED_STTY:-}" ]]; then
-    stty "$SAVED_STTY" < /dev/tty 2>/dev/null || stty "$SAVED_STTY" 2>/dev/null || true
-    SAVED_STTY=""
+  if [[ -t 0 && -t 1 ]] && is_command_available "stty"; then
+    if [[ -n "${SAVED_STTY:-}" ]]; then
+      stty "$SAVED_STTY" 2>/dev/null || true
+      SAVED_STTY=""
+    fi
+    if [[ -n "${INITIAL_STTY:-}" ]]; then
+      stty "$INITIAL_STTY" 2>/dev/null || true
+    fi
+    stty echo icanon 2>/dev/null || true
   fi
-  if [[ -n "${INITIAL_STTY:-}" ]]; then
-    stty "$INITIAL_STTY" < /dev/tty 2>/dev/null || stty "$INITIAL_STTY" 2>/dev/null || true
+  if [[ -t 1 ]]; then
+    printf "\033[?25h" 2>/dev/null || true
   fi
-  stty echo icanon < /dev/tty 2>/dev/null || stty echo icanon 2>/dev/null || true
-  printf "\033[?25h" > /dev/tty 2>/dev/null || printf "\033[?25h" 2>/dev/null || true
 }
 
 enable_raw_terminal() {
-  if [[ "$JSON_OUTPUT" != "true" && -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
+  if [[ "$JSON_OUTPUT" != "true" && -t 0 && -t 1 ]] && is_command_available "stty"; then
     if [[ -z "$SAVED_STTY" ]]; then
-      SAVED_STTY=$(stty -g < /dev/tty 2>/dev/null || stty -g 2>/dev/null || echo "")
+      SAVED_STTY=$(stty -g 2>/dev/null || echo "")
     fi
-    stty -icanon -echo < /dev/tty 2>/dev/null || stty -icanon -echo 2>/dev/null || true
+    stty -icanon -echo 2>/dev/null || true
   fi
 }
 
@@ -817,50 +844,125 @@ get_vpn_node_info() {
   NODE_CITY="${NODE_CITY:-Unknown City}"
   NODE_COUNTRY_CODE="${NODE_COUNTRY_CODE:-XX}"
 
-  # Classification & Anti-fraud via ipquery.io
-  local query_raw=""
+  # Multi-database Anti-Fraud & Risk Consensus (Scamalytics, AbuseIPDB, IP-API, IPQuery)
+  local q_dir="$TMP_WORK_DIR/quality_bench"
+  mkdir -p "$q_dir" 2>/dev/null || true
+  local scam_file="$q_dir/scam.json"
+  local abuse_file="$q_dir/abuse.json"
+  local ipapi_file="$q_dir/ipapi.json"
+  local ipq_file="$q_dir/ipq.json"
+
   if [[ -n "$primary_ip" ]]; then
-    query_raw=$(curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
-  fi
-  local is_vpn=false is_tor=false is_datacenter=false risk_score=""
-
-  if [[ -n "$query_raw" ]] && jq -e . >/dev/null 2>&1 <<<"$query_raw"; then
-    is_vpn=$(jq -r '.risk.is_vpn // false' <<<"$query_raw")
-    is_tor=$(jq -r '.risk.is_tor // false' <<<"$query_raw")
-    is_datacenter=$(jq -r '.risk.is_datacenter // false' <<<"$query_raw")
-    local raw_score
-    raw_score=$(jq -r '.risk.risk_score // empty' <<<"$query_raw")
-    if [[ "$raw_score" =~ ^[0-9]+$ ]] && (( raw_score >= 0 && raw_score <= 100 )); then
-      risk_score="$raw_score"
-    fi
+    ( curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=scamalytics" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$scam_file" 2>/dev/null ) &
+    ( curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=abuseipdb" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$abuse_file" 2>/dev/null ) &
+    ( curl_wrapper GET "http://ip-api.com/json/${primary_ip}?fields=status,mobile,proxy,hosting" "${ip_ver_arg[@]}" --timeout 4 > "$ipapi_file" 2>/dev/null ) &
+    ( curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 > "$ipq_file" 2>/dev/null ) &
+    wait
   fi
 
-  # Prioritize Tor -> VPN -> Datacenter -> Residential
-  if [[ "$is_tor" == "true" ]]; then
+  local scam_score="" scam_risk="" scam_vpn=false scam_dc=false scam_tor=false
+  if [[ -s "$scam_file" ]] && jq -e . >/dev/null 2>&1 < "$scam_file"; then
+    scam_score=$(jq -r '.scamalytics.scamalytics_score // empty' "$scam_file" 2>/dev/null)
+    scam_risk=$(jq -r '.scamalytics.scamalytics_risk // empty' "$scam_file" 2>/dev/null)
+    scam_vpn=$(jq -r '.scamalytics.scamalytics_proxy.is_vpn // false' "$scam_file" 2>/dev/null)
+    scam_dc=$(jq -r '(.scamalytics.scamalytics_proxy.is_datacenter // false) or (.external_datasources.x4bnet.is_datacenter // false)' "$scam_file" 2>/dev/null)
+    scam_tor=$(jq -r '(.external_datasources.x4bnet.is_tor // false)' "$scam_file" 2>/dev/null)
+  fi
+
+  local abuse_score="" abuse_reports="0" abuse_type="" abuse_tor=false
+  if [[ -s "$abuse_file" ]] && jq -e . >/dev/null 2>&1 < "$abuse_file"; then
+    abuse_score=$(jq -r '.data.abuseConfidenceScore // empty' "$abuse_file" 2>/dev/null)
+    abuse_reports=$(jq -r '.data.totalReports // 0' "$abuse_file" 2>/dev/null)
+    abuse_type=$(jq -r '.data.usageType // empty' "$abuse_file" 2>/dev/null)
+    abuse_tor=$(jq -r '.data.isTor // false' "$abuse_file" 2>/dev/null)
+  fi
+
+  local ipapi_hosting=false ipapi_proxy=false ipapi_mobile=false
+  if [[ -s "$ipapi_file" ]] && jq -e . >/dev/null 2>&1 < "$ipapi_file"; then
+    ipapi_hosting=$(jq -r '.hosting // false' "$ipapi_file" 2>/dev/null)
+    ipapi_proxy=$(jq -r '.proxy // false' "$ipapi_file" 2>/dev/null)
+    ipapi_mobile=$(jq -r '.mobile // false' "$ipapi_file" 2>/dev/null)
+  fi
+
+  local ipq_score="" ipq_dc=false ipq_vpn=false ipq_tor=false ipq_mobile=false
+  if [[ -s "$ipq_file" ]] && jq -e . >/dev/null 2>&1 < "$ipq_file"; then
+    ipq_score=$(jq -r '.risk.risk_score // empty' "$ipq_file" 2>/dev/null)
+    ipq_dc=$(jq -r '.risk.is_datacenter // false' "$ipq_file" 2>/dev/null)
+    ipq_vpn=$(jq -r '.risk.is_vpn // false' "$ipq_file" 2>/dev/null)
+    ipq_tor=$(jq -r '.risk.is_tor // false' "$ipq_file" 2>/dev/null)
+    ipq_mobile=$(jq -r '.risk.is_mobile // false' "$ipq_file" 2>/dev/null)
+  fi
+
+  NODE_SCAM_SCORE="$scam_score"
+  NODE_ABUSE_SCORE="$abuse_score"
+  NODE_ABUSE_REPORTS="$abuse_reports"
+  NODE_IPQUERY_SCORE="$ipq_score"
+
+  # Consensus classification: Tor -> VPN -> Datacenter/Hosting -> Mobile -> Residential
+  if [[ "$scam_tor" == "true" || "$abuse_tor" == "true" || "$ipq_tor" == "true" ]]; then
     NODE_TYPE="Tor Exit Node"
-  elif [[ "$is_vpn" == "true" ]]; then
+  elif [[ "$scam_vpn" == "true" || "$ipapi_proxy" == "true" || "$ipq_vpn" == "true" ]]; then
     NODE_TYPE="Commercial VPN / Proxy"
-  elif [[ "$is_datacenter" == "true" ]]; then
+  elif [[ "$ipapi_hosting" == "true" || "$ipq_dc" == "true" || "$scam_dc" == "true" || "$abuse_type" =~ [Dd]ata[[:space:]]?[Cc]enter|[Hh]osting|[Tt]ransit ]]; then
     NODE_TYPE="Data Center / Hosting"
-  elif [[ -n "$query_raw" && "$query_raw" != "null" ]]; then
+  elif [[ "$ipapi_mobile" == "true" || "$ipq_mobile" == "true" ]]; then
+    NODE_TYPE="Mobile Cellular / ISP"
+  elif [[ -n "$abuse_type" && "$abuse_type" =~ [Ff]ixed|[Rr]esidential|[Cc]onsumer|[Cc]able ]]; then
+    NODE_TYPE="Residential / ISP"
+  elif [[ -s "$ipq_file" || -s "$ipapi_file" || -s "$scam_file" ]]; then
     NODE_TYPE="Residential / ISP"
   else
     NODE_TYPE="Data Center / Hosting"
   fi
 
-  if [[ -n "$risk_score" ]]; then
-    if (( risk_score > 60 )); then
-      NODE_RISK="High Risk / Flagged ($risk_score/100)"
+  # Multi-source Anti-Fraud & Risk score calculation
+  local score_parts=()
+  local max_score=0
+  local has_score=false
+
+  if [[ "$scam_score" =~ ^[0-9]+$ ]]; then
+    has_score=true
+    score_parts+=("Scam: ${scam_score}/100")
+    (( scam_score > max_score )) && max_score=$scam_score
+  fi
+  if [[ "$abuse_score" =~ ^[0-9]+$ ]]; then
+    has_score=true
+    score_parts+=("Abuse: ${abuse_score}%")
+    (( abuse_score > max_score )) && max_score=$abuse_score
+  fi
+  if [[ "$ipq_score" =~ ^[0-9]+$ ]]; then
+    has_score=true
+    score_parts+=("IPQ: ${ipq_score}/100")
+    (( ipq_score > max_score )) && max_score=$ipq_score
+  fi
+
+  NODE_RISK_MAX_NUM="$max_score"
+
+  local score_summary=""
+  if (( ${#score_parts[@]} > 0 )); then
+    local score_joined=""
+    for sp in "${score_parts[@]}"; do
+      [[ -n "$score_joined" ]] && score_joined+=" | "
+      score_joined+="$sp"
+    done
+    score_summary=" ($score_joined)"
+  fi
+
+  if [[ "$has_score" == "true" ]]; then
+    local abuse_num="${abuse_reports//[^0-9]/}"
+    abuse_num="${abuse_num:-0}"
+    if (( max_score > 60 || abuse_num > 10 )); then
+      NODE_RISK="High Risk / Flagged${score_summary}"
       NODE_RISK_COLOR="$COLOR_DANGER"
-    elif (( risk_score > 25 )); then
-      NODE_RISK="Moderate Risk ($risk_score/100)"
+    elif (( max_score > 25 || abuse_num > 0 )); then
+      NODE_RISK="Moderate Risk${score_summary}"
       NODE_RISK_COLOR="$COLOR_WARN"
     else
-      NODE_RISK="Clean / Low Risk ($risk_score/100)"
+      NODE_RISK="Clean / Low Risk${score_summary}"
       NODE_RISK_COLOR="$COLOR_SUCCESS"
     fi
   else
-    NODE_RISK="N/A (API Unavailable)"
+    NODE_RISK="N/A (APIs Unavailable)"
     NODE_RISK_COLOR="$COLOR_NULL"
   fi
 
@@ -878,23 +980,30 @@ get_vpn_node_info() {
     NODE_CAPTCHA_COLOR="$COLOR_SUCCESS"
   fi
 
-  # TCP BBR status
+  # TCP BBR status & module detection
   if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr"; then
     NODE_BBR_STATUS="Active"
   else
-    NODE_BBR_STATUS="Inactive"
+    if modinfo tcp_bbr >/dev/null 2>&1 || ls /lib/modules/"$(uname -r 2>/dev/null)"/kernel/net/ipv4/tcp_bbr* >/dev/null 2>&1; then
+      NODE_BBR_STATUS="Inactive (Available)"
+    else
+      NODE_BBR_STATUS="Inactive"
+    fi
   fi
 
-  # Port 25 Outbound (native bash /dev/tcp with nc fallback)
-  local tcp25_exit=0
-  timeout 2 bash -c 'echo > /dev/tcp/smtp.gmail.com/25' 2>/dev/null
-  tcp25_exit=$?
-  if [[ $tcp25_exit -eq 0 ]]; then
-    NODE_PORT25_STATUS="Open"
-  elif [[ $tcp25_exit -eq 124 ]]; then
-    # Timed out - connection dropped by firewall, do not waste 2 more seconds on nc
-    NODE_PORT25_STATUS="Blocked"
-  elif is_command_available nc && nc -z -w 2 smtp.gmail.com 25 2>/dev/null; then
+  # Port 25 Outbound Consensus (multi-server SMTP check: Gmail, Outlook, Mail.ru)
+  local p25_open=false
+  local p25_hosts=("smtp.gmail.com" "smtp-mail.outlook.com" "mxs.mail.ru")
+  for host in "${p25_hosts[@]}"; do
+    if timeout 1.5 bash -c "echo > /dev/tcp/$host/25" 2>/dev/null; then
+      p25_open=true
+      break
+    elif is_command_available nc && nc -z -w 1 "$host" 25 2>/dev/null; then
+      p25_open=true
+      break
+    fi
+  done
+  if [[ "$p25_open" == "true" ]]; then
     NODE_PORT25_STATUS="Open"
   else
     NODE_PORT25_STATUS="Blocked"
@@ -992,6 +1101,87 @@ get_vpn_node_info() {
     NODE_RKN_STATUS="N/A (IPv6 only)"
     NODE_RKN_COLOR="$COLOR_NULL"
   fi
+
+  # DNSBL Spam Blacklist Check (12 premier active zones)
+  NODE_DNSBL_TOTAL=0
+  NODE_DNSBL_LISTED=0
+  NODE_DNSBL_ZONES=""
+
+  if [[ -n "$EXTERNAL_IPV4" ]]; then
+    if is_command_available dig; then
+      local d_dir="$TMP_WORK_DIR/dnsbl"
+      mkdir -p "$d_dir" 2>/dev/null || true
+
+      local a b c d
+      local IFS=.
+      read -r a b c d <<< "$EXTERNAL_IPV4"
+      local rev_ip="$d.$c.$b.$a"
+
+      local dnsbl_zones=(
+        "b.barracudacentral.org:Barracuda"
+        "bl.spamcop.net:SpamCop"
+        "dnsbl.dronebl.org:DroneBL"
+        "psbl.surriel.com:Surriel PSBL"
+        "bl.mailspike.net:Mailspike"
+        "dnsbl-1.uceprotect.net:UCEPROTECT-1"
+        "truncate.gbudb.net:GBUdb Truncate"
+        "bl.blocklist.de:Blocklist.de"
+        "all.s5h.net:s5h.net"
+        "rbl.interserver.net:InterServer"
+        "0spam.fusionzero.com:0spam"
+        "bl.nordspam.com:Nordspam"
+      )
+
+      for item in "${dnsbl_zones[@]}"; do
+        (
+          local z="${item%%:*}"
+          local n="${item#*:}"
+          local out
+          out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+          if [[ -z "$out" || "$out" == *";;"* || "$out" =~ ^127\.255\.255\. ]]; then
+            echo "clean" > "$d_dir/$n"
+          elif [[ "$out" =~ ^127\.0\. ]]; then
+            echo "listed" > "$d_dir/$n"
+          else
+            echo "clean" > "$d_dir/$n"
+          fi
+        ) &
+      done
+      wait
+
+      local listed_arr=()
+      for item in "${dnsbl_zones[@]}"; do
+        local n="${item#*:}"
+        ((NODE_DNSBL_TOTAL++))
+        local st
+        st=$(cat "$d_dir/$n" 2>/dev/null || echo "clean")
+        if [[ "$st" == "listed" ]]; then
+          ((NODE_DNSBL_LISTED++))
+          listed_arr+=("$n")
+        fi
+      done
+
+      if (( NODE_DNSBL_LISTED > 0 )); then
+        local z_joined=""
+        for lz in "${listed_arr[@]}"; do
+          [[ -n "$z_joined" ]] && z_joined+=", "
+          z_joined+="$lz"
+        done
+        NODE_DNSBL_ZONES="$z_joined"
+        NODE_DNSBL_STATUS="Listed (${NODE_DNSBL_LISTED}/${NODE_DNSBL_TOTAL}: ${z_joined})"
+        NODE_DNSBL_COLOR="$COLOR_DANGER"
+      else
+        NODE_DNSBL_STATUS="Clean (0/${NODE_DNSBL_TOTAL})"
+        NODE_DNSBL_COLOR="$COLOR_SUCCESS"
+      fi
+    else
+      NODE_DNSBL_STATUS="N/A (dig required)"
+      NODE_DNSBL_COLOR="$COLOR_NULL"
+    fi
+  else
+    NODE_DNSBL_STATUS="N/A (IPv6 only)"
+    NODE_DNSBL_COLOR="$COLOR_NULL"
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -999,34 +1189,69 @@ get_vpn_node_info() {
 # ------------------------------------------------------------------------------
 
 get_disk_type() {
-  local root_dev base_dev=""
+  local root_dev
   root_dev=$(df -P / 2>/dev/null | awk 'END {print $1}')
-  if [[ -n "$root_dev" && "$root_dev" == /dev/* ]]; then
-    base_dev=$(basename "$root_dev")
-    if [[ "$base_dev" =~ ^nvme[0-9]+n[0-9]+ ]]; then
-      base_dev="${BASH_REMATCH[0]}"
-    elif [[ "$base_dev" =~ ^[a-z]+[0-9]+$ ]]; then
-      base_dev="${base_dev%%[0-9]*}"
-    elif [[ "$base_dev" =~ ^[a-z]+ ]]; then
-      base_dev="${BASH_REMATCH[0]}"
+
+  if [[ -z "$root_dev" || "$root_dev" == "overlay" || "$root_dev" == "tmpfs" ]]; then
+    if [[ "$root_dev" == "overlay" ]]; then
+      echo "Container OverlayFS"
+    elif [[ "$root_dev" == "tmpfs" ]]; then
+      echo "RAM Disk (tmpfs)"
+    else
+      echo "Unknown"
+    fi
+    return 0
+  fi
+
+  local dev_name
+  dev_name=$(basename "$root_dev")
+
+  if [[ "$dev_name" =~ ^nvme ]]; then
+    echo "NVMe SSD"
+    return 0
+  fi
+
+  local parent_dev=""
+  if is_command_available "lsblk"; then
+    parent_dev=$(lsblk -no PKNAME "$root_dev" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+  fi
+  if [[ -z "$parent_dev" ]]; then
+    if [[ "$dev_name" =~ ^(sd[a-z]|vd[a-z]|xvd[a-z]) ]]; then
+      parent_dev="${BASH_REMATCH[1]}"
+    elif [[ "$dev_name" =~ ^(mmcblk[0-9]+) ]]; then
+      parent_dev="${BASH_REMATCH[1]}"
+    elif [[ "$dev_name" =~ ^nvme[0-9]+n[0-9]+ ]]; then
+      parent_dev="${BASH_REMATCH[0]}"
+    else
+      parent_dev="$dev_name"
     fi
   fi
 
-  local is_rotational=""
-  if [[ -n "$base_dev" && -r "/sys/block/$base_dev/queue/rotational" ]]; then
-    is_rotational=$(cat "/sys/block/$base_dev/queue/rotational" 2>/dev/null)
+  if [[ "$parent_dev" =~ ^nvme ]]; then
+    echo "NVMe SSD"
+    return 0
   fi
 
-  if [[ "$base_dev" == nvme* ]]; then
-    echo "NVMe SSD"
-  elif [[ "$is_rotational" == "0" ]]; then
+  local is_rota=""
+  if is_command_available "lsblk"; then
+    is_rota=$(lsblk -dno ROTA "/dev/$parent_dev" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+  fi
+  if [[ -z "$is_rota" && -r "/sys/block/$parent_dev/queue/rotational" ]]; then
+    is_rota=$(cat "/sys/block/$parent_dev/queue/rotational" 2>/dev/null | tr -d '[:space:]')
+  fi
+
+  if [[ "$is_rota" == "0" ]]; then
     echo "SSD"
-  elif [[ "$is_rotational" == "1" ]]; then
-    echo "HDD"
-  elif [[ "$base_dev" == vd* ]]; then
-    echo "SSD"
+  elif [[ "$is_rota" == "1" ]]; then
+    if [[ "$parent_dev" =~ ^(vd|xvd) ]]; then
+      echo "Virtual Disk"
+    else
+      echo "HDD"
+    fi
+  elif [[ "$parent_dev" =~ ^(vd|xvd) ]]; then
+    echo "Virtual Disk"
   else
-    echo "SSD"
+    echo "Unknown"
   fi
 }
 
@@ -1034,19 +1259,50 @@ measure_disk_io() {
   if [[ "$RUN_DISK_IO" != "true" ]]; then
     NODE_DISK_IO="Skipped (--no-io)"
     NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="skipped"
+    NODE_DISK_IO_MSG="Skipped (--no-io)"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
     return 0
   fi
 
   if ! is_command_available "dd" || ! is_command_available "df"; then
-    NODE_DISK_IO="N/A"
+    NODE_DISK_IO="N/A (no dd/df)"
     NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="error"
+    NODE_DISK_IO_MSG="Missing coreutils (dd/df)"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
     return 0
   fi
 
-  local target_dir="${TMP_WORK_DIR:-/tmp}"
-  if [[ ! -d "$target_dir" || ! -w "$target_dir" ]]; then
-    NODE_DISK_IO="N/A"
+  # Determine target directory on persistent storage (avoiding tmpfs/ramfs)
+  local target_dir=""
+  local candidates=( "${TMP_WORK_DIR:-}" "/var/tmp" "$PWD" )
+  for candidate in "${candidates[@]}"; do
+    [[ -z "$candidate" || ! -d "$candidate" || ! -w "$candidate" ]] && continue
+    local fs_type=""
+    if is_command_available "stat"; then
+      fs_type=$(stat -f -c %T "$candidate" 2>/dev/null || true)
+    fi
+    if [[ -z "$fs_type" ]]; then
+      fs_type=$(df -T "$candidate" 2>/dev/null | awk 'END {print $2}')
+    fi
+    # Reject in-memory RAM filesystems for disk benchmarking
+    if [[ "$fs_type" =~ ^(tmpfs|ramfs)$ ]]; then
+      continue
+    fi
+    target_dir="$candidate"
+    break
+  done
+
+  if [[ -z "$target_dir" ]]; then
+    NODE_DISK_IO="Skipped (RAM/tmpfs storage)"
     NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="skipped"
+    NODE_DISK_IO_MSG="In-memory or non-writable filesystem (tmpfs)"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
     return 0
   fi
 
@@ -1056,43 +1312,153 @@ measure_disk_io() {
   if [[ -z "$freespace_mb" || ! "$freespace_mb" =~ ^[0-9]+$ ]] || (( freespace_mb < 2048 )); then
     NODE_DISK_IO="Skipped (< 2 GB free)"
     NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="skipped"
+    NODE_DISK_IO_MSG="Less than 2 GB free space available"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
     return 0
   fi
 
   # 2. Protection: Check disk usage percentage (abort if >= 90% full)
   local used_pct
   used_pct=$(df -P "$target_dir" 2>/dev/null | awk 'END {sub(/%/, "", $5); print $5}')
-  if [[ "$used_pct" =~ ^[0-9]+$ ]] && (( used_pct >= 90 )); then
+  if [[ -z "$used_pct" || ! "$used_pct" =~ ^[0-9]+$ ]] || (( used_pct >= 90 )); then
     NODE_DISK_IO="Skipped (> 90% full)"
     NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="skipped"
+    NODE_DISK_IO_MSG="Filesystem usage is >= 90%"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
     return 0
   fi
 
   # 3. Maximum-protection single-run test: write 256 MB with fdatasync
-  local test_file="$target_dir/disk_bench_$$.tmp"
-  local dd_out=""
-  dd_out=$(timeout 8 dd if=/dev/zero of="$test_file" bs=1M count=256 conv=fdatasync 2>&1 || true)
+  local test_file="$target_dir/nodecheck_io_$$.tmp"
+  local dd_out dd_exit=0
+  dd_out=$(timeout 8 dd if=/dev/zero of="$test_file" bs=1M count=256 conv=fdatasync 2>&1) || dd_exit=$?
   rm -f "$test_file" 2>/dev/null || true
 
+  if [[ $dd_exit -eq 124 ]]; then
+    NODE_DISK_IO="Timeout (> 8s)"
+    NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="timeout"
+    NODE_DISK_IO_MSG="I/O write benchmark timed out after 8s"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
+    return 0
+  elif [[ $dd_exit -ne 0 ]]; then
+    NODE_DISK_IO="Failed (I/O error)"
+    NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="error"
+    NODE_DISK_IO_MSG="dd write returned error code $dd_exit"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
+    return 0
+  fi
+
+  # Verify actual complete write occurred (prevent 0 bytes / partial write from becoming result)
+  if ! grep -qE "256(\+0)? records (in|out)|268435456 bytes|268 MB" <<<"$dd_out"; then
+    NODE_DISK_IO="Failed (incomplete write)"
+    NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="error"
+    NODE_DISK_IO_MSG="dd failed to write full 256 MB block"
+    NODE_DISK_IO_4K="N/A"
+    NODE_DISK_IO_4K_NUM="null"
+    return 0
+  fi
+
   local speed_str=""
-  speed_str=$(awk -F '[,，]' '/copied|скопирован/ {print $NF}' <<<"$dd_out" | sed 's/^[ \t]*//;s/[ \t]*$//' | head -n 1)
+  speed_str=$(awk -F '[,，]' '/copied|скопирован/ {print $NF}' <<<"$dd_out" | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//' | head -n 1)
   if [[ -z "$speed_str" ]]; then
     speed_str=$(grep -E '/s' <<<"$dd_out" | awk '{print $(NF-1)" "$NF}' | tail -n 1)
   fi
 
   if [[ -n "$speed_str" && "$speed_str" == *"/s" ]]; then
     local num_part="${speed_str%% *}"
-    local speed_num=""
-    if [[ "$speed_str" == *"GB/s"* || "$speed_str" == *"GiB/s"* ]]; then
-      speed_num=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n * 1024 }')
+    local unit_part="${speed_str#* }"
+    local speed_mbs=""
+    if [[ "$unit_part" == *"GB/s"* || "$unit_part" == *"GiB/s"* ]]; then
+      speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n * 1024 }')
+    elif [[ "$unit_part" == *"kB/s"* || "$unit_part" == *"KiB/s"* || "$unit_part" == *"KB/s"* ]]; then
+      speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.2f", n / 1024 }')
     else
-      speed_num=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n }')
+      speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n }')
     fi
     NODE_DISK_IO="$speed_str"
-    NODE_DISK_IO_NUM="$speed_num"
+    NODE_DISK_IO_NUM="$speed_mbs"
+    NODE_DISK_IO_STATUS="success"
+    NODE_DISK_IO_MSG=""
   else
-    NODE_DISK_IO="N/A"
+    NODE_DISK_IO="Failed (unparseable output)"
     NODE_DISK_IO_NUM="null"
+    NODE_DISK_IO_STATUS="error"
+    NODE_DISK_IO_MSG="Could not parse dd speed output"
+  fi
+
+  # 4. Optional 4K IOPS via fio (strictly if locally installed, no external downloads)
+  NODE_DISK_IO_4K="N/A"
+  NODE_DISK_IO_4K_NUM="null"
+  if [[ "$NODE_DISK_IO_STATUS" == "success" ]] && is_command_available "fio"; then
+    local fio_file="$target_dir/nodecheck_fio_$$.tmp"
+    local fio_out="" fio_exit=0
+    fio_out=$(timeout 6 fio --name=bench_4k --filename="$fio_file" --rw=randwrite --bs=4k --size=64M --numjobs=1 --direct=1 --runtime=2 --time_based=0 --output-format=json 2>/dev/null) || fio_exit=$?
+    rm -f "$fio_file" 2>/dev/null || true
+
+    if [[ $fio_exit -eq 0 && -n "$fio_out" ]]; then
+      local raw_iops=""
+      raw_iops=$(jq -r '.jobs[0].write.iops // empty' 2>/dev/null <<<"$fio_out")
+      if [[ -n "$raw_iops" && "$raw_iops" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        local iops_int="${raw_iops%%.*}"
+        if (( iops_int >= 1000 )); then
+          NODE_DISK_IO_4K=$(awk -v i="$iops_int" 'BEGIN { printf "%.0fk IOPS", i / 1000 }')
+        else
+          NODE_DISK_IO_4K="${iops_int} IOPS"
+        fi
+        NODE_DISK_IO_4K_NUM="$iops_int"
+      fi
+    fi
+  fi
+}
+
+measure_crypto_bench() {
+  if [[ "$RUN_CRYPTO_BENCH" != "true" ]]; then
+    NODE_CRYPTO_SPEED="Skipped (--no-crypto)"
+    NODE_CRYPTO_SPEED_MB_S="null"
+    return 0
+  fi
+
+  if ! is_command_available "openssl"; then
+    NODE_CRYPTO_SPEED="N/A (no openssl)"
+    NODE_CRYPTO_SPEED_MB_S="null"
+    return 0
+  fi
+
+  local bench_out="" bench_exit=0
+  bench_out=$(timeout 3 openssl speed -mr -elapsed -seconds 1 -bytes 1024 -evp aes-128-gcm 2>/dev/null) || bench_exit=$?
+
+  if [[ $bench_exit -ne 0 || -z "$bench_out" ]]; then
+    bench_out=$(timeout 3 openssl speed -mr -elapsed -seconds 1 -evp aes-128-gcm 2>/dev/null) || bench_exit=$?
+  fi
+
+  local raw_bytes=""
+  if [[ $bench_exit -eq 0 && -n "$bench_out" ]]; then
+    raw_bytes=$(awk -F: 'tolower($3) ~ /^aes-128-gcm/ {print $NF}' <<<"$bench_out" | tail -n 1)
+  fi
+
+  if [[ -n "$raw_bytes" && "$raw_bytes" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    local mb_s
+    mb_s=$(awk -v b="$raw_bytes" 'BEGIN { printf "%.1f", b / 1000000 }')
+    NODE_CRYPTO_SPEED_MB_S="$mb_s"
+    local mb_int="${mb_s%%.*}"
+    mb_int="${mb_int:-0}"
+    if (( mb_int >= 1000 )); then
+      NODE_CRYPTO_SPEED="$(awk -v m="$mb_s" 'BEGIN { printf "%.2f GB/s", m / 1000 }')"
+    else
+      NODE_CRYPTO_SPEED="${mb_s} MB/s"
+    fi
+  else
+    NODE_CRYPTO_SPEED="N/A"
+    NODE_CRYPTO_SPEED_MB_S="null"
   fi
 }
 
@@ -1116,6 +1482,35 @@ get_system_specs() {
   if [[ ! "$NODE_CPU_CORES" =~ ^[1-9][0-9]*$ ]]; then
     NODE_CPU_CORES=1
   fi
+
+  # Hardware Crypto / AES-NI / ARM Crypto Detection
+  local cpu_flags=""
+  if [[ -r /proc/cpuinfo ]]; then
+    cpu_flags=$(grep -m1 -E '^(flags|Features)[[:space:]]*:' /proc/cpuinfo 2>/dev/null || true)
+  fi
+  if [[ -z "$cpu_flags" ]] && is_command_available "lscpu"; then
+    cpu_flags=$(lscpu 2>/dev/null | grep -iE 'Flags|Features' | head -n 1 || true)
+  fi
+
+  if grep -qw -E 'aes|pmull' <<<"$cpu_flags"; then
+    NODE_AES_HARDWARE=true
+    if grep -qw 'pmull' <<<"$cpu_flags"; then
+      NODE_AES_TYPE="ARM Crypto"
+    elif grep -qw 'vaes' <<<"$cpu_flags"; then
+      NODE_AES_TYPE="VAES"
+    else
+      NODE_AES_TYPE="AES-NI"
+    fi
+    NODE_AES_STATUS="$NODE_AES_TYPE"
+    NODE_AES_COLOR="$COLOR_SUCCESS"
+  else
+    NODE_AES_HARDWARE=false
+    NODE_AES_TYPE="none"
+    NODE_AES_STATUS="Disabled (Soft)"
+    NODE_AES_COLOR="$COLOR_DANGER"
+  fi
+
+  measure_crypto_bench
 
   # 2. Virtualization & Uptime
   if [[ -f /.dockerenv ]]; then
@@ -1505,6 +1900,20 @@ lookup_chatgpt() {
     else
       echo "No ($code)"
     fi
+  fi
+}
+
+lookup_claude() {
+  local code
+  code=$(curl_http_code "https://claude.ai")
+  if [[ "$code" =~ ^(200|301|302)$ ]]; then
+    echo "Yes"
+  elif [[ "$code" == "403" ]]; then
+    echo "No (Cloudflare 403)"
+  elif [[ "$code" == "000" ]]; then
+    echo "No (Timeout)"
+  else
+    echo "No ($code)"
   fi
 }
 
@@ -1915,6 +2324,7 @@ run_services_check() {
     "lookup_discord" "$s_dir/discord"
     "lookup_twitter_x" "$s_dir/twitter"
     "lookup_chatgpt" "$s_dir/chatgpt"
+    "lookup_claude" "$s_dir/claude"
     "lookup_google" "$s_dir/google"
     "lookup_gemini" "$s_dir/gemini"
     "lookup_youtube" "$s_dir/youtube"
@@ -1981,6 +2391,7 @@ run_services_check() {
   ARR_RU_UNBLOCK+=( "Discord (Voice/Gateway)"$'\t'"$(read_val "$s_dir/discord" "No")" )
   ARR_RU_UNBLOCK+=( "Twitter / X"$'\t'"$(read_val "$s_dir/twitter" "No")" )
   ARR_RU_UNBLOCK+=( "OpenAI ChatGPT"$'\t'"$(read_val "$s_dir/chatgpt" "No")" )
+  ARR_RU_UNBLOCK+=( "Claude AI (Anthropic)"$'\t'"$(read_val "$s_dir/claude" "No")" )
   ARR_RU_UNBLOCK+=( "Google (Регион)"$'\t'"$(read_val "$s_dir/google" "N/A")" )
   ARR_RU_UNBLOCK+=( "Google Gemini"$'\t'"$(read_val "$s_dir/gemini" "No")" )
   ARR_RU_UNBLOCK+=( "YouTube"$'\t'"$yt_res" )
@@ -2767,7 +3178,7 @@ measure_ookla_speedtest() {
     bold "4. 🚀 Тест скорости ноды (Speedtest by Ookla)"; printf "\n"
   fi
 
-  if [[ "$RUN_IPERF" != "true" ]]; then
+  if [[ "$RUN_SPEEDTEST" != "true" ]]; then
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "  • Скорость:         %s\n\n" "$(format_value "Пропущено (--no-speedtest)")"
     fi
@@ -2991,7 +3402,24 @@ print_header() {
     echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
     echo -e " ОС и ядро:\t$(bold "$NODE_OS")"
     echo -e " Платформа:\t$(bold "${NODE_VIRT^^}") | Аптайм: $(bold "$NODE_UPTIME")"
-    echo -e " Процессор (CPU):\t$(bold "$NODE_CPU_MODEL") (${NODE_CPU_CORES} vCPU)"
+    local cpu_desc
+    cpu_desc="$(bold "$NODE_CPU_MODEL") (${NODE_CPU_CORES} vCPU)"
+    local crypto_parts=()
+    if [[ -n "$NODE_AES_STATUS" && "$NODE_AES_STATUS" != "N/A" ]]; then
+      crypto_parts+=("$(color "$NODE_AES_COLOR" "$NODE_AES_STATUS")")
+    fi
+    if [[ -n "$NODE_CRYPTO_SPEED" && "$NODE_CRYPTO_SPEED" != "N/A" && "$NODE_CRYPTO_SPEED" != *"Skipped"* ]]; then
+      crypto_parts+=("$(bold "$NODE_CRYPTO_SPEED")")
+    fi
+    if (( ${#crypto_parts[@]} > 0 )); then
+      local crypto_joined=""
+      for p in "${crypto_parts[@]}"; do
+        [[ -n "$crypto_joined" ]] && crypto_joined+=", "
+        crypto_joined+="$p"
+      done
+      cpu_desc="$cpu_desc [$crypto_joined]"
+    fi
+    echo -e " Процессор (CPU):\t$cpu_desc"
     echo -e " CPU Steal:\t$(color "$NODE_CPU_STEAL_COLOR" "$NODE_CPU_STEAL")"
     local disk_info="$NODE_DISK"
     local disk_extra=()
@@ -3000,17 +3428,24 @@ print_header() {
       if [[ "$NODE_DISK_IO" == *"Skipped"* ]]; then
         disk_extra+=("$NODE_DISK_IO")
       else
-        disk_extra+=("I/O: $NODE_DISK_IO")
+        local io_label="I/O: $NODE_DISK_IO"
+        if [[ -n "$NODE_DISK_IO_4K" && "$NODE_DISK_IO_4K" != "N/A" ]]; then
+          io_label="$io_label, 4K: $NODE_DISK_IO_4K"
+        fi
+        disk_extra+=("$io_label")
       fi
     fi
     if (( ${#disk_extra[@]} > 0 )); then
-      local disk_extra_joined
-      disk_extra_joined=$(IFS=', '; echo "${disk_extra[*]}")
+      local disk_extra_joined=""
+      for d_item in "${disk_extra[@]}"; do
+        [[ -n "$disk_extra_joined" ]] && disk_extra_joined+=", "
+        disk_extra_joined+="$d_item"
+      done
       disk_info="$disk_info [$disk_extra_joined]"
     fi
     echo -e " Память / Диск:\tRAM: $(bold "$NODE_RAM") | Диск: $(bold "$disk_info")"
     echo -e " Тип хоста:\t$(bold "$NODE_TYPE")"
-    echo -e " Реестр РКН:\t$(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS")"
+    echo -e " Репутация / Базы:\tРКН: $(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS") | DNSBL: $(color "$NODE_DNSBL_COLOR" "$NODE_DNSBL_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
   } | format_table
@@ -3185,6 +3620,10 @@ build_json() {
     --arg uptime "${NODE_UPTIME:-}" \
     --arg cpu_model "${NODE_CPU_MODEL:-}" \
     --arg cpu_cores "${NODE_CPU_CORES:-1}" \
+    --arg cpu_aes_hw "${NODE_AES_HARDWARE:-false}" \
+    --arg cpu_aes_type "${NODE_AES_TYPE:-none}" \
+    --arg cpu_crypto_speed "${NODE_CRYPTO_SPEED:-}" \
+    --arg cpu_crypto_num "${NODE_CRYPTO_SPEED_MB_S:-null}" \
     --arg cpu_steal "${NODE_CPU_STEAL_NUM:-0.0}" \
     --arg cpu_steal_alltime "${NODE_CPU_STEAL_ALLTIME:-0.00}" \
     --arg ram "${NODE_RAM:-}" \
@@ -3192,14 +3631,27 @@ build_json() {
     --arg disk_type "${NODE_DISK_TYPE:-}" \
     --arg disk_io "${NODE_DISK_IO:-}" \
     --arg disk_io_num "${NODE_DISK_IO_NUM:-null}" \
+    --arg disk_io_status "${NODE_DISK_IO_STATUS:-pending}" \
+    --arg disk_io_msg "${NODE_DISK_IO_MSG:-}" \
+    --arg disk_io_4k "${NODE_DISK_IO_4K:-}" \
+    --arg disk_io_4k_num "${NODE_DISK_IO_4K_NUM:-null}" \
     --arg country "${NODE_COUNTRY_CODE:-}" \
     --arg city "${NODE_CITY:-}" \
     --arg asn "${NODE_ASN:-}" \
     --arg org "${NODE_ORG:-}" \
     --arg host_type "${NODE_TYPE:-}" \
     --arg risk "${NODE_RISK:-}" \
+    --arg risk_max "${NODE_RISK_MAX_NUM:-}" \
+    --arg scam_score "${NODE_SCAM_SCORE:-}" \
+    --arg abuse_score "${NODE_ABUSE_SCORE:-}" \
+    --arg abuse_reports "${NODE_ABUSE_REPORTS:-0}" \
+    --arg ipq_score "${NODE_IPQUERY_SCORE:-}" \
     --arg captcha "${NODE_CAPTCHA_STATUS:-}" \
     --arg rkn "${NODE_RKN_STATUS:-}" \
+    --arg dnsbl_status "${NODE_DNSBL_STATUS:-}" \
+    --arg dnsbl_total "${NODE_DNSBL_TOTAL:-0}" \
+    --arg dnsbl_listed "${NODE_DNSBL_LISTED:-0}" \
+    --arg dnsbl_zones "${NODE_DNSBL_ZONES:-}" \
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
@@ -3222,16 +3674,40 @@ build_json() {
         uptime: $uptime,
         cpu_model: $cpu_model,
         cpu_cores: ($cpu_cores | try tonumber catch 1),
+        cpu_aes_hardware: ($cpu_aes_hw == "true"),
+        cpu_aes_type: (if $cpu_aes_type != "" and $cpu_aes_type != "none" then $cpu_aes_type else null end),
+        cpu_crypto_speed: (if $cpu_crypto_speed != "" and $cpu_crypto_speed != "N/A" and ($cpu_crypto_speed | test("Skipped") | not) then $cpu_crypto_speed else null end),
+        cpu_crypto_speed_mb_s: (if $cpu_crypto_num != "" and $cpu_crypto_num != "null" and $cpu_crypto_num != "N/A" then ($cpu_crypto_num | try tonumber catch null) else null end),
         cpu_steal_pct: ($cpu_steal | try tonumber catch 0.0),
         cpu_steal_all_time_pct: ($cpu_steal_alltime | try tonumber catch 0.00),
         ram: $ram,
         disk: $disk,
         disk_type: (if $disk_type != "" then $disk_type else null end),
-        disk_io_write_speed: (if $disk_io != "" and $disk_io != "N/A" then $disk_io else null end),
-        disk_io_write_mbps: (if $disk_io_num != "" and $disk_io_num != "null" and $disk_io_num != "N/A" then ($disk_io_num | try tonumber catch null) else null end)
+        disk_io_status: (if $disk_io_status != "" then $disk_io_status else null end),
+        disk_io_message: (if $disk_io_msg != "" then $disk_io_msg else null end),
+        disk_io_write_speed: (if $disk_io_status == "success" and $disk_io != "" then $disk_io else null end),
+        disk_io_write_mb_s: (if $disk_io_status == "success" and $disk_io_num != "" and $disk_io_num != "null" and $disk_io_num != "N/A" then ($disk_io_num | try tonumber catch null) else null end),
+        disk_io_4k_speed: (if $disk_io_4k != "" and $disk_io_4k != "N/A" then $disk_io_4k else null end),
+        disk_io_4k_iops: (if $disk_io_4k_num != "" and $disk_io_4k_num != "null" and $disk_io_4k_num != "N/A" then ($disk_io_4k_num | try tonumber catch null) else null end)
       },
       location: { country: $country, city: $city, asn: $asn, org: $org },
-      quality: { host_type: $host_type, risk: $risk, google_captcha: $captcha, rkn_registry: $rkn },
+      quality: {
+        host_type: $host_type,
+        risk: $risk,
+        risk_score_max: (if $risk_max != "" and $risk_max != "null" then ($risk_max | try tonumber catch null) else null end),
+        scamalytics_score: (if $scam_score != "" and $scam_score != "null" then ($scam_score | try tonumber catch null) else null end),
+        abuseipdb_score: (if $abuse_score != "" and $abuse_score != "null" then ($abuse_score | try tonumber catch null) else null end),
+        abuseipdb_reports: (if $abuse_reports != "" and $abuse_reports != "null" then ($abuse_reports | try tonumber catch 0) else 0 end),
+        ipquery_score: (if $ipq_score != "" and $ipq_score != "null" then ($ipq_score | try tonumber catch null) else null end),
+        google_captcha: $captcha,
+        rkn_registry: $rkn,
+        dnsbl: {
+          status: $dnsbl_status,
+          total: ($dnsbl_total | try tonumber catch 0),
+          blacklisted: ($dnsbl_listed | try tonumber catch 0),
+          listed_zones: (if $dnsbl_zones != "" then ($dnsbl_zones | split(", ")) else [] end)
+        }
+      },
       network: {
         bbr: $bbr,
         udp: $udp,
@@ -3293,8 +3769,11 @@ NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит 
   -6, --ipv6               Принудительно использовать только IPv6
   -j, --json               Вывод результатов в чистом формате JSON
   -s, --streams ЧИСЛО      Число параллельных потоков iPerf3 (по умолч.: 2 для 1 vCPU, 4 для 2+ vCPU)
-  --no-iperf, --no-speedtest  Пропустить замер скорости (только пинг)
-  --no-io, --no-disk-bench Пропустить тест скорости диска (I/O)
+  --no-iperf               Пропустить замер скорости iPerf3 (только пинг)
+  --no-speedtest           Пропустить замер скорости ноды Ookla Speedtest
+  --no-crypto              Пропустить замер скорости криптографии (AES)
+  --io, --disk-bench       Запустить замер скорости диска (I/O) (по умолч. включен в TUI, выключен в -j)
+  --no-io, --no-disk-bench Пропустить замер скорости диска (I/O)
   --iperf-all              Замер скорости iPerf3 по всем 7 регионам РФ (по умолчанию включен)
   --full-iperf             Расширенный тест iPerf3 (по 10с на прием и отдачу)
   --iperf-time СЕК         Время замера iPerf3 на прием и отдачу (по умолч.: 3с)
@@ -3367,12 +3846,26 @@ parse_arguments() {
         IPERF_STREAMS="$2"
         shift 2
         ;;
-      --no-iperf|--no-speedtest)
+      --no-iperf)
         RUN_IPERF=false
+        shift
+        ;;
+      --no-speedtest)
+        RUN_SPEEDTEST=false
+        shift
+        ;;
+      --no-crypto)
+        RUN_CRYPTO_BENCH=false
+        shift
+        ;;
+      --io|--disk-bench)
+        RUN_DISK_IO=true
+        DISK_IO_EXPLICIT=true
         shift
         ;;
       --no-io|--no-disk-bench)
         RUN_DISK_IO=false
+        DISK_IO_EXPLICIT=true
         shift
         ;;
       --install-deps)
@@ -3433,13 +3926,17 @@ parse_arguments() {
         ;;
     esac
   done
+
+  if [[ "$JSON_OUTPUT" == "true" && "$DISK_IO_EXPLICIT" != "true" ]]; then
+    RUN_DISK_IO=false
+  fi
 }
 
 main() {
   MAIN_PID=$$
   export MAIN_PID
-  if [[ -t 1 && -r /dev/tty ]] && is_command_available "stty"; then
-    INITIAL_STTY=$(stty -g < /dev/tty 2>/dev/null || stty -g 2>/dev/null || echo "")
+  if [[ -t 0 && -t 1 ]] && is_command_available "stty"; then
+    INITIAL_STTY=$(stty -g 2>/dev/null || echo "")
   fi
   CPU_STAT_START=$(head -n 1 /proc/stat 2>/dev/null || echo "")
 
@@ -3472,7 +3969,7 @@ main() {
   fi
 
   get_vpn_node_info
-  progress_status "Анализ CPU Steal, памяти и виртуализации"
+  progress_status "Анализ CPU, криптографии, памяти и виртуализации"
   get_system_specs
   progress_clear
 
@@ -3490,7 +3987,7 @@ main() {
   fi
 
   # 2 & 3. Western Services & RU Local Services
-  progress_status "Проверка доступности 34 сервисов (зарубежные и РФ)"
+  progress_status "Проверка доступности сервисов (зарубежные и РФ)"
   run_services_check
   progress_clear
 
