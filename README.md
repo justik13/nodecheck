@@ -55,8 +55,9 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
    * Мультисерверная проверка Outbound Port 25 (SMTP пул: Gmail, Outlook, Mail.ru) без ложных срабатываний из-за единичного троттлинга.
    * Двунаправленный UDP (проверка DNS-резолвинга 1.1.1.1 / 8.8.8.8).
 
-4. **Многоисточниковый консенсус антифрода (стандарт xykt/IPQuality):**
+4. **Многоисточниковый консенсус антифрода и определение типа IP (стандарт xykt/IPQuality):**
    * Параллельный опрос 4 независимых баз (**Scamalytics, AbuseIPDB, IP-API, IPQuery**) за ~350 мс.
+   * Определение типа IP: **Native IP (Локальный)** vs **Broadcast IP (Маршрутизированный)** через сопоставление физической геолокации и RIR (RIPE/ARIN/APNIC).
    * Консенсусная классификация хоста: `Tor Exit Node` -> `Commercial VPN / Proxy` -> `Data Center / Hosting` -> `Mobile` -> `Residential`.
    * Проверка на нахождение IP в реестре блокировок Роскомнадзора (**базы Antifilter `ip.lst` и CIDR `ipsum.lst`**).
    * Прямая проверка триггера **Google Captcha** («Необычный трафик»).
@@ -100,7 +101,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
  Процессор (CPU):   AMD Ryzen 9 9950X 16-Core Processor (1 vCPU) [VAES, 10.76 GB/s]
  CPU Steal:         0.0% (Clean) | 0.02% (за аптайм)
  Память / Диск:     RAM: 352 MB / 1967 MB (17.9%) | Диск: 3.8G / 15G (28%) [Virtual Disk, I/O: 1.1 GB/s]
- Тип хоста:         Data Center / Hosting
+ Тип хоста:         VPS (Hosting/Datacenter) | Тип IP: Native IP (Локальный)
  Репутация / Базы:  РКН: Clean (Not in Registry) | DNSBL: Clean (0/12)
  Антифрод / Риск:   Clean / Low Risk (Scam: 0/100 | Abuse: 0% | IPQ: 20/100), Google Captcha: Clean (No Captcha)
  Сетевой стек:      BBR: Inactive (Available) | UDP: Open (DNS Bidirectional) | Port 25: Open
@@ -225,8 +226,9 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 ## 🔒 Безопасность и чистота (Zero Traces)
 
 * **Изолированная среда:** все временные данные сессии хранятся в защищенной директории `/tmp/nodecheck.$PID.*`.
-* **Гарантированная очистка:** при штатном завершении, прерывании через `Ctrl+C` или аварийном выходе срабатывает обработчик сигналов `trap cleanup EXIT INT TERM`, удаляющий 100% временных файлов.
-* **Безопасность системы:** скрипт не модифицирует настройки системы, не меняет системные конфигурации сети и не оставляет следов на диске.
+* **Песочница конфигураций:** для сторонних бинарников (включая Ookla Speedtest) принудительно устанавливается `XDG_CONFIG_HOME="$TMP_WORK_DIR"`, что исключает создание служебных директорий в домашнем каталоге (`~/.config/ookla`).
+* **Гарантированная очистка:** при штатном завершении, прерывании через `Ctrl+C` или аварийном выходе срабатывает глобальный обработчик сигналов `trap cleanup EXIT INT TERM`, немедленно удаляющий тестовые файлы дискового бенчмарка и 100% временных директорий.
+* **Безопасность системы:** скрипт не модифицирует настройки системы, не меняет системные конфигурации сети, изолированно читает метаданные дистрибутива без выполнения стороннего кода через `source` и не оставляет следов на диске.
 
 ---
 

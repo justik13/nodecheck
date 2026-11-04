@@ -47,6 +47,10 @@ NODE_ASN=""
 NODE_ORG=""
 NODE_CITY=""
 NODE_COUNTRY_CODE=""
+NODE_IP_NATIVE="Native (Geo-consistent)"
+NODE_IP_NATIVE_COLOR="0;90"
+NODE_RIR_REG_COUNTRY=""
+CURRENT_DISK_TEST_FILE=""
 NODE_TYPE=""
 NODE_RISK=""
 NODE_RISK_MAX_NUM=""
@@ -542,8 +546,11 @@ cleanup() {
     kill -KILL $pids 2>/dev/null || true
     wait 2>/dev/null || true
   fi
-  if [[ -n "$TMP_WORK_DIR" && "$TMP_WORK_DIR" == /tmp/nodecheck.* && -d "$TMP_WORK_DIR" ]]; then
-    rm -rf "$TMP_WORK_DIR"
+  if [[ -n "$CURRENT_DISK_TEST_FILE" && -f "$CURRENT_DISK_TEST_FILE" ]]; then
+    rm -f "$CURRENT_DISK_TEST_FILE" 2>/dev/null || true
+  fi
+  if [[ -n "$TMP_WORK_DIR" && -d "$TMP_WORK_DIR" && ( "$TMP_WORK_DIR" == *nodecheck* || "$TMP_WORK_DIR" == /tmp/* ) ]]; then
+    rm -rf "$TMP_WORK_DIR" 2>/dev/null || true
   fi
 }
 
@@ -818,6 +825,19 @@ mask_ipv6() {
   echo "${h1:-0}:${h2:-0}:${h3:-0}:*:*:*:*:*"
 }
 
+query_single_dnsbl() {
+  local rev_ip="$1" z="$2" n="$3" out_file="$4"
+  local out
+  out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  if [[ -z "$out" || "$out" == *";;"* || "$out" =~ ^127\.255\.255\. ]]; then
+    echo "clean" > "$out_file"
+  elif [[ "$out" =~ ^127\.0\. ]]; then
+    echo "listed" > "$out_file"
+  else
+    echo "clean" > "$out_file"
+  fi
+}
+
 get_vpn_node_info() {
   local primary_ip="${EXTERNAL_IPV4:-$EXTERNAL_IPV6}"
   local ip_ver_arg=()
@@ -882,20 +902,50 @@ get_vpn_node_info() {
   NODE_CITY="${NODE_CITY:-Unknown City}"
   NODE_COUNTRY_CODE="${NODE_COUNTRY_CODE:-XX}"
 
-  # Multi-database Anti-Fraud & Risk Consensus (Scamalytics, AbuseIPDB, IP-API, IPQuery)
+  # Multi-database Anti-Fraud & Risk Consensus (Scamalytics, AbuseIPDB, IP-API, IPQuery, MaxMind/RIR, Captcha, RKN)
   local q_dir="$TMP_WORK_DIR/quality_bench"
   mkdir -p "$q_dir" 2>/dev/null || true
   local scam_file="$q_dir/scam.json"
   local abuse_file="$q_dir/abuse.json"
   local ipapi_file="$q_dir/ipapi.json"
   local ipq_file="$q_dir/ipq.json"
+  local checkplace_file="$q_dir/checkplace.json"
+  local captcha_file="$q_dir/captcha.html"
+  local rkn_ip_file="$q_dir/rkn_ip.lst"
+  local rkn_sum_file="$q_dir/rkn_sum.lst"
 
   if [[ -n "$primary_ip" ]]; then
-    ( curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=scamalytics" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$scam_file" 2>/dev/null ) &
-    ( curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=abuseipdb" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$abuse_file" 2>/dev/null ) &
-    ( curl_wrapper GET "http://ip-api.com/json/${primary_ip}?fields=status,mobile,proxy,hosting" "${ip_ver_arg[@]}" --timeout 4 > "$ipapi_file" 2>/dev/null ) &
-    ( curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 > "$ipq_file" 2>/dev/null ) &
+    curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=scamalytics" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$scam_file" 2>/dev/null &
+    curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=abuseipdb" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$abuse_file" 2>/dev/null &
+    curl_wrapper GET "http://ip-api.com/json/${primary_ip}?fields=status,mobile,proxy,hosting" "${ip_ver_arg[@]}" --timeout 4 > "$ipapi_file" 2>/dev/null &
+    curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 > "$ipq_file" 2>/dev/null &
+    curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?lang=en" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$checkplace_file" 2>/dev/null &
+    curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 > "$captcha_file" 2>/dev/null &
+    if [[ -n "$EXTERNAL_IPV4" ]]; then
+      curl_wrapper GET "https://antifilter.download/list/ip.lst" --timeout 4 > "$rkn_ip_file" 2>/dev/null &
+      curl_wrapper GET "https://antifilter.network/download/ipsum.lst" --timeout 4 > "$rkn_sum_file" 2>/dev/null &
+    fi
     wait
+  fi
+
+  # 1. Native IP vs Broadcast IP (Geo-consistent vs Geo-discrepant)
+  local actual_cc="" reg_cc=""
+  if [[ -s "$checkplace_file" ]] && jq -e . >/dev/null 2>&1 < "$checkplace_file"; then
+    actual_cc=$(jq -r '.Country.IsoCode // empty' "$checkplace_file" 2>/dev/null)
+    reg_cc=$(jq -r '.Country.RegisteredCountry.IsoCode // empty' "$checkplace_file" 2>/dev/null)
+  fi
+  NODE_RIR_REG_COUNTRY="${reg_cc^^}"
+  if [[ -n "$NODE_RIR_REG_COUNTRY" && "$NODE_RIR_REG_COUNTRY" != "NULL" ]]; then
+    if [[ "$NODE_RIR_REG_COUNTRY" == "${NODE_COUNTRY_CODE^^}" ]]; then
+      NODE_IP_NATIVE="Native (Geo-consistent)"
+      NODE_IP_NATIVE_COLOR="$COLOR_SUCCESS"
+    else
+      NODE_IP_NATIVE="Broadcast / Geodiscrepant (Reg: ${NODE_RIR_REG_COUNTRY})"
+      NODE_IP_NATIVE_COLOR="$COLOR_WARN"
+    fi
+  else
+    NODE_IP_NATIVE="Native (Geo-consistent)"
+    NODE_IP_NATIVE_COLOR="$COLOR_SUCCESS"
   fi
 
   local scam_score="" scam_risk="" scam_vpn=false scam_dc=false scam_tor=false
@@ -1004,9 +1054,9 @@ get_vpn_node_info() {
     NODE_RISK_COLOR="$COLOR_NULL"
   fi
 
-  # Google Captcha Test
-  local g_search
-  g_search=$(curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 2>/dev/null)
+  # Google Captcha Test result
+  local g_search=""
+  [[ -s "$captcha_file" ]] && g_search=$(<"$captcha_file")
   if [[ -z "$g_search" ]]; then
     NODE_CAPTCHA_STATUS="N/A (Timeout)"
     NODE_CAPTCHA_COLOR="$COLOR_NULL"
@@ -1033,7 +1083,7 @@ get_vpn_node_info() {
   local p25_open=false
   local p25_hosts=("smtp.gmail.com" "smtp-mail.outlook.com" "mxs.mail.ru")
   for host in "${p25_hosts[@]}"; do
-    if timeout 1.5 bash -c "echo > /dev/tcp/$host/25" 2>/dev/null; then
+    if timeout 0.8 bash -c "true > /dev/tcp/$host/25" 2>/dev/null; then
       p25_open=true
       break
     elif is_command_available nc && nc -z -w 1 "$host" 25 2>/dev/null; then
@@ -1081,54 +1131,48 @@ get_vpn_node_info() {
     local ip_list_ok=false
     local ipsum_list_ok=false
 
-    local rkn_list
-    rkn_list=$(curl_wrapper GET "https://antifilter.download/list/ip.lst" --timeout 4 2>/dev/null || echo "")
-    if [[ -n "$rkn_list" ]]; then
+    if [[ -s "$rkn_ip_file" ]]; then
       ip_list_ok=true
-      if grep -Fxq "$EXTERNAL_IPV4" <<<"$rkn_list"; then
+      if grep -Fxq "$EXTERNAL_IPV4" "$rkn_ip_file"; then
         rkn_hit=true
       fi
     fi
 
-    if [[ "$rkn_hit" != "true" ]]; then
-      local ipsum_list
-      ipsum_list=$(curl_wrapper GET "https://antifilter.network/download/ipsum.lst" --timeout 4 2>/dev/null || echo "")
-      if [[ -n "$ipsum_list" ]]; then
-        ipsum_list_ok=true
-        if awk -v ip="$EXTERNAL_IPV4" '
-          function ip2int(s, oct, n) {
-            n = split(s, oct, ".")
-            if (n != 4) return -1
-            return ((oct[1] * 256 + oct[2]) * 256 + oct[3]) * 256 + oct[4]
-          }
-          BEGIN { target = ip2int(ip); hit = 0 }
-          {
-            line = $1
-            if (!line || line ~ /^#/) next
-            p = index(line, "/")
-            if (p > 0) {
-              cidr_ip = substr(line, 1, p - 1)
-              prefix = substr(line, p + 1) + 0
-              net = ip2int(cidr_ip)
-              if (net >= 0 && prefix >= 0 && prefix <= 32) {
-                size = 2 ^ (32 - prefix)
-                net_base = net - (net % size)
-                if (target >= net_base && target < net_base + size) { hit = 1; exit }
-              }
-            } else {
-              if (ip2int(line) == target) { hit = 1; exit }
+    if [[ "$rkn_hit" != "true" && -s "$rkn_sum_file" ]]; then
+      ipsum_list_ok=true
+      if awk -v ip="$EXTERNAL_IPV4" '
+        function ip2int(s, oct, n) {
+          n = split(s, oct, ".")
+          if (n != 4) return -1
+          return ((oct[1] * 256 + oct[2]) * 256 + oct[3]) * 256 + oct[4]
+        }
+        BEGIN { target = ip2int(ip); hit = 0 }
+        {
+          line = $1
+          if (!line || line ~ /^#/) next
+          p = index(line, "/")
+          if (p > 0) {
+            cidr_ip = substr(line, 1, p - 1)
+            prefix = substr(line, p + 1) + 0
+            net = ip2int(cidr_ip)
+            if (net >= 0 && prefix >= 0 && prefix <= 32) {
+              size = 2 ^ (32 - prefix)
+              net_base = net - (net % size)
+              if (target >= net_base && target < net_base + size) { hit = 1; exit }
             }
+          } else {
+            if (ip2int(line) == target) { hit = 1; exit }
           }
-          END { exit (hit ? 0 : 1) }' <<<"$ipsum_list"; then
-          rkn_hit=true
-        fi
+        }
+        END { exit (hit ? 0 : 1) }' "$rkn_sum_file"; then
+        rkn_hit=true
       fi
     fi
 
     if [[ "$rkn_hit" == "true" ]]; then
       NODE_RKN_STATUS="BLOCKED in RU (Antifilter Registry)"
       NODE_RKN_COLOR="$COLOR_DANGER"
-    elif [[ "$ip_list_ok" == "true" && "$ipsum_list_ok" == "true" ]]; then
+    elif [[ "$ip_list_ok" == "true" || "$ipsum_list_ok" == "true" ]]; then
       NODE_RKN_STATUS="Clean (Not in Registry)"
       NODE_RKN_COLOR="$COLOR_SUCCESS"
     else
@@ -1171,19 +1215,7 @@ get_vpn_node_info() {
       )
 
       for item in "${dnsbl_zones[@]}"; do
-        (
-          local z="${item%%:*}"
-          local n="${item#*:}"
-          local out
-          out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
-          if [[ -z "$out" || "$out" == *";;"* || "$out" =~ ^127\.255\.255\. ]]; then
-            echo "clean" > "$d_dir/$n"
-          elif [[ "$out" =~ ^127\.0\. ]]; then
-            echo "listed" > "$d_dir/$n"
-          else
-            echo "clean" > "$d_dir/$n"
-          fi
-        ) &
+        query_single_dnsbl "$rev_ip" "${item%%:*}" "${item#*:}" "$d_dir/${item#*:}" &
       done
       wait
 
@@ -1372,9 +1404,11 @@ measure_disk_io() {
 
   # 3. Maximum-protection single-run test: write 256 MB with fdatasync
   local test_file="$target_dir/nodecheck_io_$$.tmp"
+  CURRENT_DISK_TEST_FILE="$test_file"
   local dd_out dd_exit=0
   dd_out=$(timeout 8 dd if=/dev/zero of="$test_file" bs=1M count=256 conv=fdatasync 2>&1) || dd_exit=$?
   rm -f "$test_file" 2>/dev/null || true
+  CURRENT_DISK_TEST_FILE=""
 
   if [[ $dd_exit -eq 124 ]]; then
     NODE_DISK_IO="Timeout (> 8s)"
@@ -1438,9 +1472,11 @@ measure_disk_io() {
   NODE_DISK_IO_4K_NUM="null"
   if [[ "$NODE_DISK_IO_STATUS" == "success" ]] && is_command_available "fio"; then
     local fio_file="$target_dir/nodecheck_fio_$$.tmp"
+    CURRENT_DISK_TEST_FILE="$fio_file"
     local fio_out="" fio_exit=0
     fio_out=$(timeout 6 fio --name=bench_4k --filename="$fio_file" --rw=randwrite --bs=4k --size=64M --numjobs=1 --direct=1 --runtime=2 --time_based=0 --output-format=json 2>/dev/null) || fio_exit=$?
     rm -f "$fio_file" 2>/dev/null || true
+    CURRENT_DISK_TEST_FILE=""
 
     if [[ $fio_exit -eq 0 && -n "$fio_out" ]]; then
       local raw_iops=""
@@ -1591,13 +1627,12 @@ get_system_specs() {
   fi
 
   # 3. OS & Kernel
+  local os_name="Linux"
   if [[ -f /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    source /etc/os-release 2>/dev/null
-    NODE_OS="${PRETTY_NAME:-Linux} ($(uname -r) $(uname -m))"
-  else
-    NODE_OS="Linux ($(uname -r) $(uname -m))"
+    os_name=$(awk -F= '$1=="PRETTY_NAME" {gsub(/^["'\''"]+|["'\''"]+$/, "", $2); print $2}' /etc/os-release 2>/dev/null)
+    os_name="${os_name:-Linux}"
   fi
+  NODE_OS="${os_name} ($(uname -r) $(uname -m))"
 
   # 4. RAM & Disk
   if is_command_available "free"; then
@@ -1829,23 +1864,13 @@ run_geoip_consensus() {
   mkdir -p "$v4_dir" "$v6_dir"
 
   local running=0
-  local steal_int="${NODE_CPU_STEAL_NUM%%.*}"
-  steal_int="${steal_int//[^0-9]/}"
-  steal_int="${steal_int:-0}"
-  local cores="${NODE_CPU_CORES//[^0-9]/}"
-  cores="${cores:-1}"
-  local max_jobs=4
-  if (( cores <= 1 || steal_int > 5 )); then
-    max_jobs=3
-  elif (( cores >= 4 )); then
-    max_jobs=8
-  fi
+  local max_jobs=16
   local db
 
-  # Launch parallel background queries in batches of max_jobs
+  # Launch parallel background queries in batches of max_jobs (network I/O bound)
   for db in "${geoip_dbs[@]}"; do
     if [[ $IPV4_SUPPORTED -eq 1 ]]; then
-      ( query_single_geoip "$db" "4" "$v4_dir/$db" ) &
+      query_single_geoip "$db" "4" "$v4_dir/$db" &
       running=$((running + 1))
       if (( running >= max_jobs )); then
         wait -n 2>/dev/null || true
@@ -1853,7 +1878,7 @@ run_geoip_consensus() {
       fi
     fi
     if [[ $IPV6_SUPPORTED -eq 1 ]]; then
-      ( query_single_geoip "$db" "6" "$v6_dir/$db" ) &
+      query_single_geoip "$db" "6" "$v6_dir/$db" &
       running=$((running + 1))
       if (( running >= max_jobs )); then
         wait -n 2>/dev/null || true
@@ -1879,10 +1904,27 @@ run_geoip_consensus() {
 # 2. Western Unblock Lookups
 # ------------------------------------------------------------------------------
 
+format_unblock_status() {
+  local code="$1"
+  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
+    echo "Yes"
+  elif [[ "$code" == "000" ]]; then
+    echo "No (DPI Drop / Timeout)"
+  elif [[ "$code" == "403" ]]; then
+    echo "No (WAF / Geo-403)"
+  elif [[ "$code" == "451" ]]; then
+    echo "No (RKN Blockpage / 451)"
+  elif [[ "$code" == "429" ]]; then
+    echo "No (Captcha / Rate Limit)"
+  else
+    echo "No ($code)"
+  fi
+}
+
 lookup_instagram() {
   local code
   code=$(curl_http_code "https://www.instagram.com")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 lookup_discord() {
@@ -1894,19 +1936,19 @@ lookup_discord() {
 lookup_twitter_x() {
   local code
   code=$(curl_http_code "https://x.com")
-  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 lookup_rutracker() {
   local code
   code=$(curl_http_code "https://rutracker.org")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 lookup_amnezia() {
   local code
   code=$(curl_http_code "https://amnezia.org")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 lookup_chatgpt() {
@@ -1944,15 +1986,7 @@ lookup_chatgpt() {
 lookup_claude() {
   local code
   code=$(curl_http_code "https://claude.ai")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then
-    echo "Yes"
-  elif [[ "$code" == "403" ]]; then
-    echo "No (Cloudflare 403)"
-  elif [[ "$code" == "000" ]]; then
-    echo "No (Timeout)"
-  else
-    echo "No ($code)"
-  fi
+  format_unblock_status "$code"
 }
 
 lookup_google() {
@@ -2233,19 +2267,19 @@ lookup_apple() {
 lookup_steam() {
   local code
   code=$(curl_http_code "https://store.steampowered.com")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 lookup_playstation() {
   local code
   code=$(curl_http_code "https://www.playstation.com")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 lookup_reddit() {
   local code
   code=$(curl_http_code "https://www.reddit.com")
-  if [[ "$code" =~ ^(200|301|302)$ ]]; then echo "Yes"; else echo "No ($code)"; fi
+  format_unblock_status "$code"
 }
 
 # ------------------------------------------------------------------------------
@@ -2394,21 +2428,11 @@ run_services_check() {
   )
 
   local i=0 running=0
-  local steal_int="${NODE_CPU_STEAL_NUM%%.*}"
-  steal_int="${steal_int//[^0-9]/}"
-  steal_int="${steal_int:-0}"
-  local cores="${NODE_CPU_CORES//[^0-9]/}"
-  cores="${cores:-1}"
-  local max_jobs=4
-  if (( cores <= 1 || steal_int > 5 )); then
-    max_jobs=3
-  elif (( cores >= 4 )); then
-    max_jobs=8
-  fi
+  local max_jobs=16
   while (( i < ${#check_pairs[@]} )); do
     local fn="${check_pairs[i]}"
     local out="${check_pairs[i+1]}"
-    ( "$fn" > "$out" ) &
+    "$fn" > "$out" &
     running=$((running + 1))
     if (( running >= max_jobs )); then
       wait -n 2>/dev/null || true
@@ -2887,19 +2911,16 @@ iperf_stream_test() {
 # Regional test targets: Region | City | Provider | Host | PortRange
 RU_REGIONAL_SERVERS=(
   "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
-  "Центральный регион"$'\t'"Москва"$'\t'"ЭР-Телеком / Дом.ру"$'\t'"st.msk.ertelecom.ru"$'\t'"5201-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'"3333"
   "Северо-Западный регион"$'\t'"Санкт-Петербург"$'\t'"ЭР-Телеком"$'\t'"st.spb.ertelecom.ru"$'\t'"5201-5209"
   "Приволжский регион"$'\t'"Казань"$'\t'"ЭР-Телеком"$'\t'"st.kzn.ertelecom.ru"$'\t'"5201-5209"
   "Приволжский регион"$'\t'"Казань"$'\t'"МТС"$'\t'"kazst.st.mtsws.net"$'\t'"3333"
-  "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ЭР-Телеком"$'\t'"st.nn.ertelecom.ru"$'\t'"5201-5209"
   "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ТТК"$'\t'"speed-nn.vtt.net"$'\t'"5201"
   "Приволжский регион"$'\t'"Самара"$'\t'"ЭР-Телеком"$'\t'"st.samara.ertelecom.ru"$'\t'"5201-5209"
   "Южный регион"$'\t'"Ростов-на-Дону"$'\t'"ЭР-Телеком"$'\t'"st.rostov.ertelecom.ru"$'\t'"5201-5209"
   "Южный регион"$'\t'"Волгоград"$'\t'"ЭР-Телеком"$'\t'"st.volgograd.ertelecom.ru"$'\t'"5201-5209"
   "Южный регион"$'\t'"Волгоград"$'\t'"ТТК"$'\t'"speed-vgd.vtt.net"$'\t'"5201"
   "Южный регион"$'\t'"Астрахань"$'\t'"Билайн"$'\t'"astrakhan1.speedtest.corbina.net"$'\t'"5201"
-  "Уральский регион"$'\t'"Екатеринбург"$'\t'"ЭР-Телеком"$'\t'"st.ekat.ertelecom.ru"$'\t'"5201-5209"
   "Уральский регион"$'\t'"Тюмень"$'\t'"ЭР-Телеком"$'\t'"st.tmn.ertelecom.ru"$'\t'"5201-5209"
   "Уральский регион"$'\t'"Тюмень"$'\t'"МТС"$'\t'"tumst.st.mtsws.net"$'\t'"3333"
   "Уральский регион"$'\t'"Челябинск"$'\t'"ЭР-Телеком"$'\t'"st.chel.ertelecom.ru"$'\t'"5201-5209"
@@ -2941,6 +2962,16 @@ run_region_speed_test() {
 
   local target_ip
   target_ip=$(resolve_target_ip "$host")
+  if [[ -z "$target_ip" ]]; then
+    ARR_CONNECTIVITY+=( "$region"$'\t'"$city"$'\t'"$provider"$'\t'"$host"$'\t'"$base_port"$'\t'"$ping_val"$'\t'"$ping_num"$'\t—\tnull\tnull' )
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "  %s  %s  %s\n" \
+        "$(pad_str "$label" 37)" \
+        "$(pad_str "$(format_value "$ping_val")" 10)" \
+        "$(format_value "—")"
+    fi
+    return
+  fi
 
   local streams="$IPERF_STREAMS"
   if [[ -z "$streams" ]]; then
@@ -2994,12 +3025,12 @@ run_region_speed_test() {
     fi
 
     ((port_attempts++))
-    if (( port_attempts > 4 )); then
+    if (( port_attempts > 3 )); then
       break
     fi
 
-    # Fast TCP pre-check (2.0s) to skip closed or firewalled ports immediately without sending corrupting payload
-    if ! timeout 2.0 bash -c "true > /dev/tcp/$target_ip/$p" 2>/dev/null; then
+    # Fast TCP pre-check (0.8s) to skip closed or firewalled ports immediately without sending corrupting payload
+    if ! timeout 0.8 bash -c "true > /dev/tcp/$target_ip/$p" 2>/dev/null; then
       continue
     fi
 
@@ -3202,6 +3233,15 @@ measure_ru_iperf() {
 
 measure_ookla_speedtest() {
   local cc="${NODE_COUNTRY_CODE^^}"
+  if [[ "$IPV6_ONLY" == "true" ]]; then
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      bold "4. 🚀 Тест скорости ноды (Speedtest by Ookla)"; printf "\n"
+      printf "  • Замер канала:     %s\n\n" "$(format_value "Пропущено (Ookla Speedtest требует IPv4)")"
+    fi
+    NODE_UPLINK_STATUS="Skipped (IPv6-only host)"
+    return 0
+  fi
+
   # Для нод в РФ тест Ookla пропускается (Ookla заблокирована в РФ; замеры связности и скорости выполняются в Блоке 5)
   if [[ "$cc" == "RU" ]]; then
     if [[ "$JSON_OUTPUT" != "true" ]]; then
@@ -3227,7 +3267,7 @@ measure_ookla_speedtest() {
   local st_bin=""
   if is_command_available "speedtest"; then
     local check_v
-    check_v=$(speedtest --version 2>/dev/null || true)
+    check_v=$(HOME="$TMP_WORK_DIR" XDG_CONFIG_HOME="$TMP_WORK_DIR" speedtest --version 2>/dev/null || true)
     if [[ "$check_v" =~ "Speedtest by Ookla"|"Ookla" ]]; then
       st_bin="$(command -v speedtest)"
     fi
@@ -3286,7 +3326,7 @@ measure_ookla_speedtest() {
     fi
   fi
 
-  timeout 45 "$st_bin" --accept-license --accept-gdpr -p no -f json > "$st_json" 2> "$st_err" &
+  timeout 45 env HOME="$TMP_WORK_DIR" XDG_CONFIG_HOME="$TMP_WORK_DIR" "$st_bin" --accept-license --accept-gdpr -p no -f json > "$st_json" 2> "$st_err" &
   local st_pid=$!
 
   local spinner=( "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏" )
@@ -3375,10 +3415,6 @@ measure_ookla_speedtest() {
     NODE_UPLINK_STATUS="$err_msg"
   fi
   return 0
-}
-
-measure_local_uplink() {
-  measure_ookla_speedtest "$@"
 }
 
 # ------------------------------------------------------------------------------
@@ -3489,7 +3525,7 @@ print_header() {
       disk_info="$disk_info [$disk_extra_joined]"
     fi
     echo -e " Память / Диск:\tRAM: $(bold "$NODE_RAM") | Диск: $(bold "$disk_info")"
-    echo -e " Тип хоста:\t$(bold "$NODE_TYPE")"
+    echo -e " Тип хоста:\t$(bold "$NODE_TYPE") | Тип IP: $(color "$NODE_IP_NATIVE_COLOR" "$NODE_IP_NATIVE")"
     echo -e " Репутация / Базы:\tРКН: $(color "$NODE_RKN_COLOR" "$NODE_RKN_STATUS") | DNSBL: $(color "$NODE_DNSBL_COLOR" "$NODE_DNSBL_STATUS")"
     echo -e " Антифрод / Риск:\t$(color "$NODE_RISK_COLOR" "$NODE_RISK"), Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "$NODE_CAPTCHA_STATUS")"
     echo -e " Сетевой стек:\tBBR: $(format_value "$NODE_BBR_STATUS") | UDP: $(format_value "$NODE_UDP_STATUS") | Port 25: $(format_value "$NODE_PORT25_STATUS")"
@@ -3692,6 +3728,8 @@ build_json() {
     --arg asn "${NODE_ASN:-}" \
     --arg org "${NODE_ORG:-}" \
     --arg host_type "${NODE_TYPE:-}" \
+    --arg ip_type "${NODE_IP_NATIVE:-}" \
+    --arg reg_country "${NODE_RIR_REG_COUNTRY:-}" \
     --arg risk "${NODE_RISK:-}" \
     --arg risk_max "${NODE_RISK_MAX_NUM:-}" \
     --arg scam_score "${NODE_SCAM_SCORE:-}" \
@@ -3745,6 +3783,8 @@ build_json() {
       location: { country: $country, city: $city, asn: $asn, org: $org },
       quality: {
         host_type: $host_type,
+        ip_type: (if $ip_type != "" then $ip_type else null end),
+        registered_country: (if $reg_country != "" then $reg_country else null end),
         risk: $risk,
         risk_score_max: (if $risk_max != "" and $risk_max != "null" then ($risk_max | try tonumber catch null) else null end),
         scamalytics_score: (if $scam_score != "" and $scam_score != "null" then ($scam_score | try tonumber catch null) else null end),
@@ -3841,8 +3881,10 @@ NodeCheck (RU Edition) v${SCRIPT_VERSION} — комплексный аудит 
 
 Примеры:
   ./nodecheck.sh                         # Комплексный аудит (железо, GeoIP, сервисы, пинг и iPerf3 по всем 7 регионам РФ)
+  ./nodecheck.sh -f                      # Аудит с отображением полного нескрытого IP
   ./nodecheck.sh -s 8                    # Аудит с 8 параллельными потоками iPerf3
   ./nodecheck.sh --no-iperf              # Быстрый экспресс-аудит без замера скорости (~10-15 секунд)
+  ./nodecheck.sh --no-speedtest          # Экспресс-аудит без замера скорости Ookla Speedtest
   ./nodecheck.sh --full-iperf            # Расширенный замер скорости (по 10с на каждый регион)
   ./nodecheck.sh -4                      # Аудит только по IPv4
   ./nodecheck.sh -6                      # Аудит только по IPv6
