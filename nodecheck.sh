@@ -4989,12 +4989,12 @@ parse_arguments() {
         RUN_CRYPTO_BENCH=false
         shift
         ;;
-      --io|--disk-bench)
+      --io|--disk-bench|--disk-io)
         RUN_DISK_IO=true
         DISK_IO_EXPLICIT=true
         shift
         ;;
-      --no-io|--no-disk-bench)
+      --no-io|--no-disk-bench|--no-disk-io)
         RUN_DISK_IO=false
         DISK_IO_EXPLICIT=true
         shift
