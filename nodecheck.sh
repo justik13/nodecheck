@@ -87,6 +87,10 @@ SORTED_UPLINK_CANDIDATES=()
 SAVED_STTY=""
 INITIAL_STTY=""
 IPERF_SKIPPED=false
+NODE_NEAREST_RU_CITY=""
+NODE_NEAREST_RU_PROV=""
+NODE_NEAREST_RU_PING=""
+NODE_NEAREST_RU_PING_NUM="null"
 
 NODE_CPU_MODEL=""
 NODE_CPU_CORES=1
@@ -297,6 +301,9 @@ format_value() {
       ;;
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
+      ;;
+    *"No Captcha"*|*"No captcha"*)
+      color "$COLOR_SUCCESS" "$val"
       ;;
     *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
       color "$COLOR_DANGER" "$val"
@@ -934,7 +941,7 @@ get_vpn_node_info() {
   if [[ -n "$primary_ip" ]]; then
     curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=scamalytics" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$scam_file" 2>/dev/null &
     curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?db=abuseipdb" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$abuse_file" 2>/dev/null &
-    curl_wrapper GET "http://ip-api.com/json/${primary_ip}?fields=status,mobile,proxy,hosting" "${ip_ver_arg[@]}" --timeout 4 > "$ipapi_file" 2>/dev/null &
+    curl_wrapper GET "http://ip-api.com/json/${primary_ip}?fields=status,country,countryCode,city,as,org,mobile,proxy,hosting" "${ip_ver_arg[@]}" --timeout 4 > "$ipapi_file" 2>/dev/null &
     curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 > "$ipq_file" 2>/dev/null &
     curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?lang=en" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$checkplace_file" 2>/dev/null &
     curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 > "$captcha_file" 2>/dev/null &
@@ -1927,6 +1934,7 @@ run_geoip_consensus() {
   local v4_dir="$TMP_WORK_DIR/geoip_v4"
   local v6_dir="$TMP_WORK_DIR/geoip_v6"
   mkdir -p "$v4_dir" "$v6_dir"
+  ARR_GEOIP=()
 
   local running=0
   local max_jobs=16
@@ -1963,6 +1971,86 @@ run_geoip_consensus() {
     fi
     ARR_GEOIP+=( "$db"$'\t'"$v4"$'\t'"$v6" )
   done
+}
+
+apply_geoip_consensus_to_header() {
+  local target_col="v4"
+  if [[ $IPV6_SUPPORTED -eq 1 && $IPV4_SUPPORTED -ne 1 ]]; then
+    target_col="v6"
+  fi
+
+  local top_code="" top_count=0 total=0 row c
+  local -A counts=()
+
+  for row in "${ARR_GEOIP[@]}"; do
+    local db_name v4 v6
+    IFS=$'\t' read -r db_name v4 v6 <<<"$row"
+    local check_val="$v4"
+    [[ "$target_col" == "v6" ]] && check_val="$v6"
+    if [[ "$check_val" =~ ^[A-Z]{2}$ ]]; then
+      counts["$check_val"]=$(( counts["$check_val"] + 1 ))
+      total=$(( total + 1 ))
+    fi
+  done
+
+  for c in "${!counts[@]}"; do
+    if (( counts["$c"] > top_count )); then
+      top_count=${counts["$c"]}
+      top_code="$c"
+    fi
+  done
+
+  # If strong consensus/plurality exists (at least 4 databases and >= 35% of total votes)
+  if [[ -n "$top_code" && $total -gt 0 ]] && (( top_count >= 4 && (top_count * 100 / total) >= 35 )); then
+    if [[ "$NODE_COUNTRY_CODE" != "$top_code" || -z "$NODE_CITY" || "$NODE_CITY" == "N/A" ]]; then
+      local prev_country="$NODE_COUNTRY_CODE"
+      NODE_COUNTRY_CODE="$top_code"
+
+      # Replace city with one from a provider matching the consensus country
+      local new_city=""
+      local q_dir="$TMP_WORK_DIR/quality_bench"
+      if [[ -s "$q_dir/ipapi.json" ]]; then
+        local ipapi_cc ipapi_c
+        ipapi_cc=$(jq -r '.countryCode // empty' "$q_dir/ipapi.json" 2>/dev/null)
+        ipapi_c=$(jq -r '.city // empty' "$q_dir/ipapi.json" 2>/dev/null)
+        if [[ "${ipapi_cc^^}" == "$top_code" && -n "$ipapi_c" ]]; then
+          new_city="$ipapi_c"
+        fi
+      fi
+      if [[ -z "$new_city" && -s "$q_dir/ipq.json" ]]; then
+        local ipq_cc ipq_c
+        ipq_cc=$(jq -r '.location.country_code // empty' "$q_dir/ipq.json" 2>/dev/null)
+        ipq_c=$(jq -r '.location.city // empty' "$q_dir/ipq.json" 2>/dev/null)
+        if [[ "${ipq_cc^^}" == "$top_code" && -n "$ipq_c" ]]; then
+          new_city="$ipq_c"
+        fi
+      fi
+      if [[ -z "$new_city" && -s "$q_dir/checkplace.json" ]]; then
+        local cp_cc cp_c
+        cp_cc=$(jq -r '.Country.IsoCode // empty' "$q_dir/checkplace.json" 2>/dev/null)
+        cp_c=$(jq -r '.City.Names.en // empty' "$q_dir/checkplace.json" 2>/dev/null)
+        if [[ "${cp_cc^^}" == "$top_code" && -n "$cp_c" ]]; then
+          new_city="$cp_c"
+        fi
+      fi
+      if [[ -n "$new_city" ]]; then
+        NODE_CITY="$new_city"
+      elif [[ "$prev_country" != "$top_code" ]]; then
+        NODE_CITY=""
+      fi
+    fi
+  fi
+
+  # Recalculate Native vs Broadcast IP against consensus country
+  if [[ -n "$NODE_RIR_REG_COUNTRY" && "$NODE_RIR_REG_COUNTRY" != "NULL" && "$NODE_RIR_REG_COUNTRY" =~ ^[A-Z]{2}$ ]]; then
+    if [[ "$NODE_RIR_REG_COUNTRY" == "${NODE_COUNTRY_CODE^^}" ]]; then
+      NODE_IP_NATIVE="Native (Geo-consistent)"
+      NODE_IP_NATIVE_COLOR="$COLOR_SUCCESS"
+    else
+      NODE_IP_NATIVE="Broadcast / Geodiscrepant (Reg: ${NODE_RIR_REG_COUNTRY})"
+      NODE_IP_NATIVE_COLOR="$COLOR_WARN"
+    fi
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -3475,6 +3563,52 @@ measure_ru_iperf() {
   # Restore terminal stty settings
   restore_terminal
 
+  local best_rtt_tenths=999999
+  local best_city=""
+  local best_provider=""
+  local best_ping_str=""
+
+  for srv_entry in "${RU_REGIONAL_SERVERS[@]}"; do
+    local r_reg r_city r_prov r_host r_pspec
+    IFS=$'\t' read -r r_reg r_city r_prov r_host r_pspec <<<"$srv_entry"
+    if [[ -f "$p_dir/$r_host" ]]; then
+      local p_str
+      p_str=$(read_val "$p_dir/$r_host" "N/A")
+      if [[ "$p_str" =~ ^([0-9]+(\.[0-9]+)?)[[:space:]]*ms ]]; then
+        local num="${BASH_REMATCH[1]}"
+        local int_part="${num%%.*}"
+        local dec_part="${num#*.}"
+        [[ "$dec_part" == "$num" ]] && dec_part="0"
+        dec_part="${dec_part:0:1}"
+        local tenths=$(( int_part * 10 + dec_part ))
+        if (( tenths < best_rtt_tenths )); then
+          best_rtt_tenths=$tenths
+          best_city="$r_city"
+          best_provider="$r_prov"
+          best_ping_str="$p_str"
+        fi
+      fi
+    fi
+  done
+
+  if [[ -n "$best_city" ]] && (( best_rtt_tenths < 999999 )); then
+    NODE_NEAREST_RU_CITY="$best_city"
+    NODE_NEAREST_RU_PROV="$best_provider"
+    NODE_NEAREST_RU_PING="$best_ping_str"
+    NODE_NEAREST_RU_PING_NUM=$(awk -v t="$best_rtt_tenths" 'BEGIN { printf "%.1f", t / 10 }')
+
+    if [[ "$JSON_OUTPUT" != "true" ]]; then
+      printf "\n"
+      if (( best_rtt_tenths <= 250 )); then
+        printf "  • Ближайший узел по задержке (скорее всего реальная локация ноды): \033[%sm%s (%s) — %s\033[0m\n" \
+          "$COLOR_SUCCESS" "$best_city" "$best_provider" "$best_ping_str"
+      else
+        printf "  • Ближайший узел по задержке в РФ: \033[%sm%s (%s) — %s\033[0m\n" \
+          "$COLOR_INFO" "$best_city" "$best_provider" "$best_ping_str"
+      fi
+    fi
+  fi
+
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if ! is_command_available "iperf3"; then
       printf "\n"
@@ -4273,7 +4407,11 @@ print_header() {
     else
       echo -e " IPv6:\t$(color "$COLOR_NULL" "None (Not configured)")"
     fi
-    echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$NODE_COUNTRY_CODE ($NODE_CITY)") — $NODE_ASN ($NODE_ORG)"
+    local loc_str="$NODE_COUNTRY_CODE"
+    if [[ -n "$NODE_CITY" && "$NODE_CITY" != "N/A" ]]; then
+      loc_str="$NODE_COUNTRY_CODE ($NODE_CITY)"
+    fi
+    echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$loc_str") — $NODE_ASN ($NODE_ORG)"
     echo -e " ОС и ядро:\t$(bold "$NODE_OS")"
     echo -e " Платформа:\t$(bold "${NODE_VIRT^^}") | Аптайм: $(bold "$NODE_UPTIME")"
     local cpu_desc
@@ -4586,6 +4724,9 @@ build_json() {
     --arg uplink_ping "${NODE_UPLINK_PING_NUM:-null}" \
     --arg uplink_dl "${NODE_UPLINK_DL:-null}" \
     --arg uplink_ul "${NODE_UPLINK_UL:-null}" \
+    --arg nearest_ru_city "${NODE_NEAREST_RU_CITY:-}" \
+    --arg nearest_ru_prov "${NODE_NEAREST_RU_PROV:-}" \
+    --arg nearest_ru_ping "${NODE_NEAREST_RU_PING_NUM:-null}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
     --arg geoip_raw "$geoip_lines" \
@@ -4652,7 +4793,12 @@ build_json() {
           latency_ms: (if $uplink_ping != "" and $uplink_ping != "null" and $uplink_ping != "N/A" then ($uplink_ping | try tonumber catch null) else null end),
           download_mbps: (if $uplink_dl != "" and $uplink_dl != "null" then ($uplink_dl | try tonumber catch null) else null end),
           upload_mbps: (if $uplink_ul != "" and $uplink_ul != "null" then ($uplink_ul | try tonumber catch null) else null end)
-        }
+        },
+        nearest_ru_node: (if $nearest_ru_city != "" then {
+          city: $nearest_ru_city,
+          provider: $nearest_ru_prov,
+          latency_ms: (if $nearest_ru_ping != "" and $nearest_ru_ping != "null" then ($nearest_ru_ping | try tonumber catch null) else null end)
+        } else null end)
       },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
       geoip_consensus: (
@@ -4973,18 +5119,15 @@ main() {
   get_vpn_node_info
   progress_status "Анализ CPU, криптографии, памяти и диска"
   get_system_specs
+
+  # 1. 18 GeoIP Databases & Consensus
+  progress_status "Опрос 18 баз GeoIP (параллельно)"
+  run_geoip_consensus
+  apply_geoip_consensus_to_header
   progress_clear
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_header
-  fi
-
-  # 1. 18 GeoIP Databases
-  progress_status "Опрос 18 баз GeoIP (параллельно)"
-  run_geoip_consensus
-  progress_clear
-
-  if [[ "$JSON_OUTPUT" != "true" ]]; then
     print_geoip_table
   fi
 
