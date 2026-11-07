@@ -2381,9 +2381,9 @@ lookup_google_search_captcha() {
   if [[ "$raw" == *"/sorry/"* || "$raw" == *"recaptcha"* || "$raw" == *"unusual traffic"* ]]; then
     echo "Triggered (Captcha)"
   elif [[ -n "$raw" ]]; then
-    echo "No"
+    echo "Clean (No)"
   else
-    echo "No (Timeout)"
+    echo "N/A (Timeout)"
   fi
 }
 
@@ -2700,7 +2700,7 @@ run_western_services_check() {
 
   ARR_RU_UNBLOCK=(
     "Google"$'\t'"$(read_val "$s_dir/google" "N/A")"
-    "Google Search Captcha"$'\t'"$(read_val "$s_dir/google_captcha" "No")"
+    "Google Search Captcha"$'\t'"$(read_val "$s_dir/google_captcha" "Clean (No)")"
     "YouTube"$'\t'"$yt_res"
     "YouTube CDN"$'\t'"$(read_val "$s_dir/youtube_cdn" "No")"
     "YouTube Premium"$'\t'"$(read_val "$s_dir/youtube_premium" "No")"
@@ -4030,9 +4030,14 @@ probe_single_dpi_site() {
   fi
   resolved_ip="${resolved_ip:-N/A}"
 
+  local req_path=""
+  if [[ "$domain" == "redirector.googlevideo.com" ]]; then
+    req_path="/report_mapping?di=no"
+  fi
+
   # HTTP check
   local http_raw http_code http_res
-  http_code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 3 "http://${domain}" 2>/dev/null)
+  http_code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 3 "http://${domain}${req_path}" 2>/dev/null)
   http_code="${http_code:-000}"
   [[ "$http_code" =~ ^0+$ ]] && http_code="000"
   if [[ "$http_code" =~ ^(301|302|307|308)$ ]]; then
@@ -4047,7 +4052,7 @@ probe_single_dpi_site() {
 
   # HTTPS check
   local https_code https_res
-  https_code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 4 -k "https://${domain}" 2>/dev/null)
+  https_code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 4 -k "https://${domain}${req_path}" 2>/dev/null)
   https_code="${https_code:-000}"
   [[ "$https_code" =~ ^0+$ ]] && https_code="000"
   if [[ "$https_code" =~ ^(200|301|302|307|308)$ ]]; then
