@@ -851,8 +851,12 @@ mask_ipv6() {
 
 query_single_dnsbl() {
   local rev_ip="$1" z="$2" n="$3" out_file="$4"
-  local out
-  out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  local out=""
+  if is_command_available "dig"; then
+    out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  elif is_command_available "nslookup"; then
+    out=$(nslookup -timeout=2 "${rev_ip}.${z}" 2>/dev/null | awk '/Address:/ {print $2}' | tail -n 1)
+  fi
   if [[ -z "$out" || "$out" == *";;"* || "$out" =~ ^127\.255\.255\. ]]; then
     echo "clean" > "$out_file"
   elif [[ "$out" =~ ^127\.0\. ]]; then
@@ -1225,7 +1229,7 @@ get_vpn_node_info() {
   NODE_DNSBL_ZONES=""
 
   if [[ -n "$EXTERNAL_IPV4" ]]; then
-    if is_command_available dig; then
+    if is_command_available dig || is_command_available nslookup; then
       local d_dir="$TMP_WORK_DIR/dnsbl"
       mkdir -p "$d_dir" 2>/dev/null || true
 
@@ -1280,7 +1284,7 @@ get_vpn_node_info() {
         NODE_DNSBL_COLOR="$COLOR_SUCCESS"
       fi
     else
-      NODE_DNSBL_STATUS="N/A (dig required)"
+      NODE_DNSBL_STATUS="N/A (dig or nslookup required)"
       NODE_DNSBL_COLOR="$COLOR_NULL"
     fi
   else
@@ -4037,14 +4041,19 @@ probe_single_dns_resolver() {
   fi
 
   # 4. Spoofing test for blocked domain rutracker.org
-  if is_command_available "dig" && [[ "$udp" == "Available" ]]; then
-    local ans
-    ans=$(dig +short +time=2 +tries=1 @"$ip" rutracker.org A 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+  if [[ "$udp" == "Available" ]]; then
+    local ans=""
+    if is_command_available "dig"; then
+      ans=$(dig +short +time=2 +tries=1 @"$ip" rutracker.org A 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+    elif is_command_available "nslookup"; then
+      ans=$(nslookup -timeout=2 rutracker.org "$ip" 2>/dev/null | awk '/Address:/ {print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -n1)
+    fi
+
     if [[ -z "$ans" ]]; then
       spoof="Blocked"
-    elif [[ "$ans" =~ ^(127\.|0\.|195\.82\.146\.|10\.|192\.168\.) ]]; then
+    elif [[ "$ans" =~ ^(127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|195\.82\.146\.|80\.254\.111\.|212\.1\.254\.|82\.138\.16\.|85\.26\.151\.|82\.200\.130\.) ]]; then
       spoof="Spoofed ($ans)"
-    elif [[ "$ans" =~ ^(104\.21\.|172\.67\.|188\.114\.) ]]; then
+    elif [[ "$ans" =~ ^(104\.(1[6-9]|2[0-7])\.|172\.(6[4-9]|7[0-1])\.|162\.15[89]\.|188\.114\.|198\.41\.|197\.234\.|173\.245\.|108\.162\.|141\.101\.|190\.93\.|103\.(2[12]|31)\.) ]]; then
       spoof="Clean"
     else
       spoof="Spoofed ($ans)"
@@ -4099,7 +4108,7 @@ run_dns_and_telegram_checks() {
       DNS_HIJACKING_MSG="DNS hijacking detected! ($spoofed_count resolvers returned spoofed IP)"
     else
       DNS_HIJACKING_DETECTED=false
-      DNS_HIJACKING_MSG="Good news, no DNS hijacking detected! (reference: Cloudflare over HTTPS)"
+      DNS_HIJACKING_MSG="Good news, no DNS hijacking detected! (reference: Cloudflare IP Ranges)"
     fi
   fi
 
@@ -4519,12 +4528,12 @@ calculate_geoip_stats() {
     done
 
     local top_pct
-    top_pct=$(awk "BEGIN { printf \"%.1f\", ($top_count / $total) * 100 }")
+    top_pct=$(awk -v c="$top_count" -v t="$total" 'BEGIN { printf "%.1f", (c / t) * 100 }')
     local top_country="${COUNTRY_NAMES[$top_code]:-Unknown}"
 
     local consensus_color="$COLOR_SUCCESS"
     local top_pct_int
-    top_pct_int=$(awk "BEGIN { print int(($top_count / $total) * 100) }")
+    top_pct_int=$(awk -v c="$top_count" -v t="$total" 'BEGIN { print int((c / t) * 100) }')
     if (( top_pct_int < 50 )); then
       consensus_color="$COLOR_DANGER"
     elif (( top_pct_int < 80 )); then
@@ -4545,7 +4554,7 @@ calculate_geoip_stats() {
         echo -e "${counts[$c]}\t$c"
       done | sort -rn | while read -r cnt c; do
         local pct
-        pct=$(awk "BEGIN { printf \"%.1f\", ($cnt / $total) * 100 }")
+        pct=$(awk -v c="$cnt" -v t="$total" 'BEGIN { printf "%.1f", (c / t) * 100 }')
         local country="${COUNTRY_NAMES[$c]:-$c}"
         echo -e "  $c\t$country\t$pct% ($cnt/$total)"
       done
