@@ -1430,23 +1430,95 @@ measure_disk_io() {
     return 0
   fi
 
-  # 3. Maximum-protection single-run test: write 64 MB with fdatasync
+  # 3. Adaptive 1 GB sequential write test (bench.sh standard with 10s ceiling)
   local test_file="$target_dir/nodecheck_io_$$.tmp"
   CURRENT_DISK_TEST_FILE="$test_file"
   local dd_out dd_exit=0
-  dd_out=$(timeout 5 dd if=/dev/zero of="$test_file" bs=1M count=64 conv=fdatasync 2>&1) || dd_exit=$?
+  local t_start_ns t_end_ns elapsed_sec="10.0"
+
+  t_start_ns=$(date +%s%N 2>/dev/null || true)
+  if [[ -z "$t_start_ns" || "$t_start_ns" == *N* ]]; then
+    t_start_ns=$(date +%s 2>/dev/null || echo "0")
+  fi
+
+  dd_out=$(timeout 10 dd if=/dev/zero of="$test_file" bs=1M count=1024 conv=fdatasync 2>&1) || dd_exit=$?
+
+  t_end_ns=$(date +%s%N 2>/dev/null || true)
+  if [[ -z "$t_end_ns" || "$t_end_ns" == *N* ]]; then
+    t_end_ns=$(date +%s 2>/dev/null || echo "0")
+    local el_s=$(( t_end_ns - t_start_ns ))
+    (( el_s <= 0 )) && el_s=1
+    elapsed_sec="$el_s.0"
+  else
+    elapsed_sec=$(awk -v s="$t_start_ns" -v e="$t_end_ns" 'BEGIN { el = (e - s) / 1000000000; if (el <= 0) el = 0.1; printf "%.2f", el }')
+  fi
+
+  local written_bytes=0
+  if [[ -f "$test_file" ]]; then
+    written_bytes=$(stat -c %s "$test_file" 2>/dev/null || wc -c < "$test_file" 2>/dev/null || echo "0")
+  fi
   rm -f "$test_file" 2>/dev/null || true
   CURRENT_DISK_TEST_FILE=""
 
-  if [[ $dd_exit -eq 124 ]]; then
-    NODE_DISK_IO="Timeout (> 5s)"
-    NODE_DISK_IO_NUM="null"
-    NODE_DISK_IO_STATUS="timeout"
-    NODE_DISK_IO_MSG="I/O write benchmark timed out after 5s"
-    NODE_DISK_IO_4K="N/A"
-    NODE_DISK_IO_4K_NUM="null"
-    return 0
-  elif [[ $dd_exit -ne 0 ]]; then
+  if [[ $dd_exit -eq 0 ]]; then
+    local speed_str=""
+    speed_str=$(awk -F '[,，]' '/copied|скопирован/ {print $NF}' <<<"$dd_out" | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//' | head -n 1)
+    if [[ -z "$speed_str" ]]; then
+      speed_str=$(grep -E '/s' <<<"$dd_out" | awk '{print $(NF-1)" "$NF}' | tail -n 1)
+    fi
+
+    if [[ -n "$speed_str" && "$speed_str" == *"/s" ]]; then
+      local num_part="${speed_str%% *}"
+      local unit_part="${speed_str#* }"
+      local speed_mbs=""
+      if [[ "$unit_part" == *"GB/s"* || "$unit_part" == *"GiB/s"* ]]; then
+        speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n * 1024 }')
+      elif [[ "$unit_part" == *"kB/s"* || "$unit_part" == *"KiB/s"* || "$unit_part" == *"KB/s"* ]]; then
+        speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.2f", n / 1024 }')
+      else
+        speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n }')
+      fi
+      NODE_DISK_IO="$speed_str"
+      NODE_DISK_IO_NUM="$speed_mbs"
+      NODE_DISK_IO_STATUS="success"
+      NODE_DISK_IO_MSG=""
+    else
+      local speed_mbs
+      speed_mbs=$(awk -v t="$elapsed_sec" 'BEGIN { if (t > 0) printf "%.1f", 1024 / t; else print "0" }')
+      local mb_int="${speed_mbs%%.*}"
+      if (( mb_int >= 1000 )); then
+        NODE_DISK_IO="$(awk -v m="$speed_mbs" 'BEGIN { printf "%.2f GB/s", m / 1024 }')"
+      else
+        NODE_DISK_IO="${speed_mbs} MB/s"
+      fi
+      NODE_DISK_IO_NUM="$speed_mbs"
+      NODE_DISK_IO_STATUS="success"
+      NODE_DISK_IO_MSG=""
+    fi
+  elif [[ $dd_exit -eq 124 ]]; then
+    if (( written_bytes >= 10485760 )); then
+      local speed_mbs written_mb
+      written_mb=$(awk -v b="$written_bytes" 'BEGIN { printf "%.0f", b / (1024 * 1024) }')
+      speed_mbs=$(awk -v b="$written_bytes" -v t="$elapsed_sec" 'BEGIN { if (t > 0) printf "%.1f", (b / (1024 * 1024)) / t; else print "0" }')
+      local mb_int="${speed_mbs%%.*}"
+      if (( mb_int >= 1000 )); then
+        NODE_DISK_IO="$(awk -v m="$speed_mbs" 'BEGIN { printf "%.2f GB/s", m / 1024 }')"
+      else
+        NODE_DISK_IO="${speed_mbs} MB/s"
+      fi
+      NODE_DISK_IO_NUM="$speed_mbs"
+      NODE_DISK_IO_STATUS="success"
+      NODE_DISK_IO_MSG="Adaptive 10s ceiling (${written_mb} MB written)"
+    else
+      NODE_DISK_IO="Timeout (> 10s)"
+      NODE_DISK_IO_NUM="null"
+      NODE_DISK_IO_STATUS="timeout"
+      NODE_DISK_IO_MSG="I/O write benchmark timed out after 10s"
+      NODE_DISK_IO_4K="N/A"
+      NODE_DISK_IO_4K_NUM="null"
+      return 0
+    fi
+  else
     NODE_DISK_IO="Failed (I/O error)"
     NODE_DISK_IO_NUM="null"
     NODE_DISK_IO_STATUS="error"
@@ -1454,45 +1526,6 @@ measure_disk_io() {
     NODE_DISK_IO_4K="N/A"
     NODE_DISK_IO_4K_NUM="null"
     return 0
-  fi
-
-  # Verify actual complete write occurred (prevent 0 bytes / partial write from becoming result)
-  if ! grep -qE "64(\+0)? records (in|out)|67108864 bytes|67(\.1)? MB|64 MB" <<<"$dd_out"; then
-    NODE_DISK_IO="Failed (incomplete write)"
-    NODE_DISK_IO_NUM="null"
-    NODE_DISK_IO_STATUS="error"
-    NODE_DISK_IO_MSG="dd failed to write full 64 MB block"
-    NODE_DISK_IO_4K="N/A"
-    NODE_DISK_IO_4K_NUM="null"
-    return 0
-  fi
-
-  local speed_str=""
-  speed_str=$(awk -F '[,，]' '/copied|скопирован/ {print $NF}' <<<"$dd_out" | sed -e 's/^[ \t]*//' -e 's/[ \t]*$//' | head -n 1)
-  if [[ -z "$speed_str" ]]; then
-    speed_str=$(grep -E '/s' <<<"$dd_out" | awk '{print $(NF-1)" "$NF}' | tail -n 1)
-  fi
-
-  if [[ -n "$speed_str" && "$speed_str" == *"/s" ]]; then
-    local num_part="${speed_str%% *}"
-    local unit_part="${speed_str#* }"
-    local speed_mbs=""
-    if [[ "$unit_part" == *"GB/s"* || "$unit_part" == *"GiB/s"* ]]; then
-      speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n * 1024 }')
-    elif [[ "$unit_part" == *"kB/s"* || "$unit_part" == *"KiB/s"* || "$unit_part" == *"KB/s"* ]]; then
-      speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.2f", n / 1024 }')
-    else
-      speed_mbs=$(awk -v n="$num_part" 'BEGIN { printf "%.1f", n }')
-    fi
-    NODE_DISK_IO="$speed_str"
-    NODE_DISK_IO_NUM="$speed_mbs"
-    NODE_DISK_IO_STATUS="success"
-    NODE_DISK_IO_MSG=""
-  else
-    NODE_DISK_IO="Failed (unparseable output)"
-    NODE_DISK_IO_NUM="null"
-    NODE_DISK_IO_STATUS="error"
-    NODE_DISK_IO_MSG="Could not parse dd speed output"
   fi
 
   # 4. Optional 4K IOPS via fio (strictly if locally installed, no external downloads)
