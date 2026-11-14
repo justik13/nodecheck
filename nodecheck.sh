@@ -87,10 +87,20 @@ SORTED_UPLINK_CANDIDATES=()
 SAVED_STTY=""
 INITIAL_STTY=""
 IPERF_SKIPPED=false
+NODE_UPLINK_CITY=""
+NODE_UPLINK_COUNTRY=""
 NODE_NEAREST_RU_CITY=""
 NODE_NEAREST_RU_PROV=""
 NODE_NEAREST_RU_PING=""
 NODE_NEAREST_RU_PING_NUM="null"
+NODE_NEAREST_GLOBAL_CITY=""
+NODE_NEAREST_GLOBAL_CC=""
+NODE_NEAREST_GLOBAL_PING=""
+NODE_NEAREST_GLOBAL_PING_NUM="null"
+NODE_ESTIMATED_COUNTRY=""
+NODE_ESTIMATED_CITY=""
+NODE_ESTIMATED_CONFIDENCE=""
+NODE_ESTIMATED_REASON=""
 
 NODE_CPU_MODEL=""
 NODE_CPU_CORES=1
@@ -3284,6 +3294,19 @@ RU_REGIONAL_SERVERS=(
   "Дальневосточный регион"$'\t'"Якутск"$'\t'"МТС"$'\t'"yktst.st.mtsws.net"$'\t'"3333"
 )
 
+# Global RTT landmarks for physical location triangulation: CountryCode | City | Host
+GLOBAL_LOCATION_SERVERS=(
+  "DE"$'\t'"Frankfurt"$'\t'"fra-de-ping.vultr.com"
+  "NL"$'\t'"Amsterdam"$'\t'"ams-nl-ping.vultr.com"
+  "SE"$'\t'"Stockholm"$'\t'"sto-se-ping.vultr.com"
+  "FI"$'\t'"Helsinki"$'\t'"hel1-speed.hetzner.com"
+  "GB"$'\t'"London"$'\t'"lon-gb-ping.vultr.com"
+  "PL"$'\t'"Warsaw"$'\t'"waw-pl-ping.vultr.com"
+  "US"$'\t'"New Jersey"$'\t'"nj-us-ping.vultr.com"
+  "SG"$'\t'"Singapore"$'\t'"sgp-ping.vultr.com"
+  "JP"$'\t'"Tokyo"$'\t'"hnd-jp-ping.vultr.com"
+)
+
 run_region_speed_test() {
   local region="$1" city="$2" provider="$3" host="$4" port_spec="$5" ping_val="$6"
   local label="• ${city} (${provider})"
@@ -3509,6 +3532,20 @@ run_region_speed_test() {
   fi
 }
 
+rtt_to_tenths() {
+  local val="$1"
+  if [[ "$val" =~ ^([0-9]+(\.[0-9]+)?) ]]; then
+    local num="${BASH_REMATCH[1]}"
+    local int_part="${num%%.*}"
+    local dec_part="${num#*.}"
+    [[ "$dec_part" == "$num" ]] && dec_part="0"
+    dec_part="${dec_part:0:1}"
+    echo $(( 10#$int_part * 10 + 10#$dec_part ))
+    return 0
+  fi
+  return 1
+}
+
 measure_ru_pings() {
   local p_dir="$TMP_WORK_DIR/pings"
   local srv host
@@ -3517,6 +3554,15 @@ measure_ru_pings() {
   # Ping all unique regional hosts in parallel
   for srv in "${RU_REGIONAL_SERVERS[@]}"; do
     IFS=$'\t' read -r _ _ _ host _ <<<"$srv"
+    if [[ ! -f "$p_dir/$host" ]]; then
+      touch "$p_dir/$host"
+      ping_host "$host" "$p_dir/$host" &
+    fi
+  done
+
+  # Ping global RTT landmarks in parallel for physical location triangulation
+  for srv in "${GLOBAL_LOCATION_SERVERS[@]}"; do
+    IFS=$'\t' read -r _ _ host <<<"$srv"
     if [[ ! -f "$p_dir/$host" ]]; then
       touch "$p_dir/$host"
       ping_host "$host" "$p_dir/$host" &
@@ -3576,15 +3622,9 @@ measure_ru_iperf() {
     local r_reg r_city r_prov r_host r_pspec
     IFS=$'\t' read -r r_reg r_city r_prov r_host r_pspec <<<"$srv_entry"
     if [[ -f "$p_dir/$r_host" ]]; then
-      local p_str
+      local p_str tenths
       p_str=$(read_val "$p_dir/$r_host" "N/A")
-      if [[ "$p_str" =~ ^([0-9]+(\.[0-9]+)?)[[:space:]]*ms ]]; then
-        local num="${BASH_REMATCH[1]}"
-        local int_part="${num%%.*}"
-        local dec_part="${num#*.}"
-        [[ "$dec_part" == "$num" ]] && dec_part="0"
-        dec_part="${dec_part:0:1}"
-        local tenths=$(( int_part * 10 + dec_part ))
+      if tenths=$(rtt_to_tenths "$p_str"); then
         if (( tenths < best_rtt_tenths )); then
           best_rtt_tenths=$tenths
           best_city="$r_city"
@@ -3603,15 +3643,12 @@ measure_ru_iperf() {
 
     if [[ "$JSON_OUTPUT" != "true" ]]; then
       printf "\n"
-      if (( best_rtt_tenths <= 250 )); then
-        printf "  • Ближайший узел по задержке (скорее всего реальная локация ноды): \033[%sm%s (%s) — %s\033[0m\n" \
-          "$COLOR_SUCCESS" "$best_city" "$best_provider" "$best_ping_str"
-      else
-        printf "  • Ближайший узел по задержке в РФ: \033[%sm%s (%s) — %s\033[0m\n" \
-          "$COLOR_INFO" "$best_city" "$best_provider" "$best_ping_str"
-      fi
+      printf "  • Ближайший узел по задержке в РФ: \033[%sm%s (%s) — %s\033[0m\n" \
+        "$COLOR_INFO" "$best_city" "$best_provider" "$best_ping_str"
     fi
   fi
+
+  assess_node_location "$p_dir"
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if ! is_command_available "iperf3"; then
@@ -3623,6 +3660,189 @@ measure_ru_iperf() {
       fi
     fi
     printf "\n"
+  fi
+}
+
+assess_node_location() {
+  local p_dir="$1"
+  local srv_entry g_cc g_city g_host p_str tenths
+
+  local best_global_tenths=999999
+  local best_global_cc="" best_global_city="" best_global_ping=""
+
+  for srv_entry in "${GLOBAL_LOCATION_SERVERS[@]}"; do
+    IFS=$'\t' read -r g_cc g_city g_host <<<"$srv_entry"
+    if [[ -f "$p_dir/$g_host" ]]; then
+      p_str=$(read_val "$p_dir/$g_host" "N/A")
+      if tenths=$(rtt_to_tenths "$p_str"); then
+        if (( tenths < best_global_tenths )); then
+          best_global_tenths=$tenths
+          best_global_cc="$g_cc"
+          best_global_city="$g_city"
+          best_global_ping="$p_str"
+        fi
+      fi
+    fi
+  done
+
+  if [[ -n "$best_global_city" ]] && (( best_global_tenths < 999999 )); then
+    NODE_NEAREST_GLOBAL_CC="$best_global_cc"
+    NODE_NEAREST_GLOBAL_CITY="$best_global_city"
+    NODE_NEAREST_GLOBAL_PING="$best_global_ping"
+    NODE_NEAREST_GLOBAL_PING_NUM=$(awk -v t="$best_global_tenths" 'BEGIN { printf "%.1f", t / 10 }')
+  fi
+
+  # Determine GeoIP consensus code & share
+  local geoip_cc="${NODE_COUNTRY_CODE^^}"
+  local geoip_city="${NODE_CITY:-}"
+  local geoip_pct=0
+  local -A geo_counts=()
+  local geo_total=0 row v4 v6 item c
+  for row in "${ARR_GEOIP[@]}"; do
+    IFS=$'\t' read -r _ v4 v6 <<<"$row"
+    local check_val="$v4"
+    [[ $IPV6_SUPPORTED -eq 1 && $IPV4_SUPPORTED -ne 1 ]] && check_val="$v6"
+    if [[ "$check_val" =~ ^[A-Z]{2}$ ]]; then
+      geo_counts["$check_val"]=$(( geo_counts["$check_val"] + 1 ))
+      geo_total=$(( geo_total + 1 ))
+    fi
+  done
+  if [[ -n "$geoip_cc" && $geo_total -gt 0 && -n "${geo_counts[$geoip_cc]:-}" ]]; then
+    geoip_pct=$(( geo_counts[$geoip_cc] * 100 / geo_total ))
+  fi
+
+  # Determine top Western Services country
+  local svc_top_cc="" svc_top_cnt=0 svc_total=0
+  local -A svc_counts=()
+  for row in "${ARR_RU_UNBLOCK[@]}"; do
+    IFS=$'\t' read -r _ item <<<"$row"
+    c=$(grep -oE '\b[A-Z]{2}\b' <<<"$item" 2>/dev/null | head -n1 || true)
+    if [[ -n "$c" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
+      svc_counts["$c"]=$(( svc_counts["$c"] + 1 ))
+      svc_total=$(( svc_total + 1 ))
+      if (( svc_counts["$c"] > svc_top_cnt )); then
+        svc_top_cnt=${svc_counts["$c"]}
+        svc_top_cc="$c"
+      fi
+    fi
+  done
+
+  # Resolve Ookla server country code if available
+  local ookla_cc="" ookla_tenths=999999
+  if [[ -n "$NODE_UPLINK_COUNTRY" ]]; then
+    for c in "${!COUNTRY_NAMES[@]}"; do
+      if [[ "${COUNTRY_NAMES[$c],,}" == "${NODE_UPLINK_COUNTRY,,}" ]]; then
+        ookla_cc="$c"
+        break
+      fi
+    done
+  fi
+  if [[ -n "$NODE_UPLINK_PING_NUM" && "$NODE_UPLINK_PING_NUM" != "null" ]]; then
+    ookla_tenths=$(rtt_to_tenths "$NODE_UPLINK_PING_NUM" || echo 999999)
+  fi
+
+  local ru_tenths=999999
+  if [[ -n "$NODE_NEAREST_RU_PING_NUM" && "$NODE_NEAREST_RU_PING_NUM" != "null" ]]; then
+    ru_tenths=$(rtt_to_tenths "$NODE_NEAREST_RU_PING_NUM" || echo 999999)
+  fi
+
+  # Find absolute minimum physical RTT across RU, Global landmarks, and Ookla
+  local min_src="" min_cc="" min_city="" min_tenths=999999 min_ping_str=""
+  if (( best_global_tenths < min_tenths )); then
+    min_tenths=$best_global_tenths
+    min_src="global"
+    min_cc="$best_global_cc"
+    min_city="$best_global_city"
+    min_ping_str="$best_global_ping"
+  fi
+  if (( ru_tenths < min_tenths )); then
+    min_tenths=$ru_tenths
+    min_src="ru"
+    min_cc="RU"
+    min_city="$NODE_NEAREST_RU_CITY"
+    min_ping_str="$NODE_NEAREST_RU_PING"
+  fi
+  if (( ookla_tenths < min_tenths )); then
+    min_tenths=$ookla_tenths
+    min_src="ookla"
+    min_cc="$ookla_cc"
+    min_city="${NODE_UPLINK_CITY:-$NODE_UPLINK_TARGET}"
+    min_ping_str="$NODE_UPLINK_PING"
+  fi
+
+  local est_cc="$geoip_cc"
+  local est_city="$geoip_city"
+  local est_conf="medium"
+  local est_reason=""
+  local verdict_color="$COLOR_INFO"
+
+  if (( min_tenths < 999999 )); then
+    # Check for clear physical contradiction: local RTT (<= 8 ms) in a different country than GeoIP
+    if [[ -n "$min_cc" && -n "$geoip_cc" && "$min_cc" != "$geoip_cc" && "$geoip_cc" != "XX" ]] && (( min_tenths <= 80 )); then
+      est_cc="$min_cc"
+      est_city="$min_city"
+      est_conf="high (physical RTT)"
+      est_reason="расхождение с GeoIP ($geoip_cc): локальный RTT до ${min_city} (${min_ping_str}) указывает на физическое размещение в ${min_cc}"
+      verdict_color="$COLOR_WARN"
+    elif [[ "$min_src" == "ru" && "$geoip_cc" != "RU" ]] && (( ru_tenths <= 100 && best_global_tenths >= 200 )); then
+      est_cc="RU"
+      est_city="$NODE_NEAREST_RU_CITY"
+      est_conf="high (physical RTT)"
+      est_reason="расхождение с GeoIP ($geoip_cc): минимальный RTT в РФ (${NODE_NEAREST_RU_CITY}, ${NODE_NEAREST_RU_PING}) заметно ниже зарубежных узлов (${best_global_city}, ${best_global_ping})"
+      verdict_color="$COLOR_WARN"
+    else
+      # Consistent or complementary evidence
+      local evidence=()
+      [[ -n "$geoip_cc" && "$geoip_cc" != "XX" ]] && evidence+=("GeoIP ${geoip_cc}${geoip_pct:+ ${geoip_pct}%}")
+      [[ -n "$svc_top_cc" ]] && evidence+=("сервисы ${svc_top_cc}")
+      if [[ -n "$ookla_cc" && "$ookla_cc" == "$geoip_cc" ]] && (( ookla_tenths < 999999 )); then
+        evidence+=("Ookla ${NODE_UPLINK_CITY:-$ookla_cc} ${NODE_UPLINK_PING}")
+        [[ -n "$NODE_UPLINK_CITY" ]] && est_city="$NODE_UPLINK_CITY"
+      elif [[ -n "$min_city" ]] && (( min_tenths < 999999 )); then
+        evidence+=("мин. RTT ${min_city} ${min_ping_str}")
+      fi
+
+      if [[ -n "$est_cc" && "$est_cc" != "XX" ]]; then
+        if [[ "$min_cc" == "$est_cc" || "$svc_top_cc" == "$est_cc" ]]; then
+          est_conf="high"
+          verdict_color="$COLOR_SUCCESS"
+        else
+          est_conf="medium"
+          verdict_color="$COLOR_INFO"
+        fi
+        local ev_str="" ev_item
+        for ev_item in "${evidence[@]}"; do
+          ev_str+="${ev_str:+, }$ev_item"
+        done
+        est_reason="подтверждено: ${ev_str}"
+      elif [[ -n "$min_cc" ]]; then
+        est_cc="$min_cc"
+        est_city="$min_city"
+        est_conf="low (RTT only)"
+        est_reason="по минимальному RTT (${min_city}, ${min_ping_str})"
+      fi
+    fi
+  else
+    est_reason="по данным GeoIP (${geoip_cc:-XX})"
+  fi
+
+  NODE_ESTIMATED_COUNTRY="${est_cc:-XX}"
+  NODE_ESTIMATED_CITY="${est_city:-Unknown}"
+  NODE_ESTIMATED_CONFIDENCE="$est_conf"
+  NODE_ESTIMATED_REASON="$est_reason"
+
+  if [[ "$JSON_OUTPUT" != "true" ]]; then
+    if [[ -n "$NODE_NEAREST_GLOBAL_CITY" ]]; then
+      printf "  • Ближайший зарубежный ориентир: \033[%sm%s (%s) — %s\033[0m\n" \
+        "$COLOR_INFO" "$NODE_NEAREST_GLOBAL_CITY" "$NODE_NEAREST_GLOBAL_CC" "$NODE_NEAREST_GLOBAL_PING"
+    fi
+    local c_label="${COUNTRY_NAMES[$NODE_ESTIMATED_COUNTRY]:-$NODE_ESTIMATED_COUNTRY}"
+    local loc_display="$NODE_ESTIMATED_COUNTRY ($c_label)"
+    if [[ -n "$NODE_ESTIMATED_CITY" && "$NODE_ESTIMATED_CITY" != "Unknown" && "$NODE_ESTIMATED_CITY" != "Unknown City" ]]; then
+      loc_display="${NODE_ESTIMATED_COUNTRY} — ${NODE_ESTIMATED_CITY} (${c_label})"
+    fi
+    printf "  • Вероятная реальная локация (по всем фактам): \033[%sm%s\033[0m (%s)\n" \
+      "$verdict_color" "$loc_display" "$NODE_ESTIMATED_REASON"
   fi
 }
 
@@ -3785,6 +4005,8 @@ measure_ookla_speedtest() {
     local ul_str="${ul_mbps} Mbps"
 
     NODE_UPLINK_TARGET="$server_desc"
+    NODE_UPLINK_CITY="$s_location"
+    NODE_UPLINK_COUNTRY="$s_country"
     NODE_UPLINK_PING="$lat_val"
     NODE_UPLINK_PING_NUM="$s_latency"
     NODE_UPLINK_DL="$dl_mbps"
@@ -4736,6 +4958,13 @@ build_json() {
     --arg nearest_ru_city "${NODE_NEAREST_RU_CITY:-}" \
     --arg nearest_ru_prov "${NODE_NEAREST_RU_PROV:-}" \
     --arg nearest_ru_ping "${NODE_NEAREST_RU_PING_NUM:-null}" \
+    --arg nearest_global_city "${NODE_NEAREST_GLOBAL_CITY:-}" \
+    --arg nearest_global_cc "${NODE_NEAREST_GLOBAL_CC:-}" \
+    --arg nearest_global_ping "${NODE_NEAREST_GLOBAL_PING_NUM:-null}" \
+    --arg est_country "${NODE_ESTIMATED_COUNTRY:-}" \
+    --arg est_city "${NODE_ESTIMATED_CITY:-}" \
+    --arg est_conf "${NODE_ESTIMATED_CONFIDENCE:-}" \
+    --arg est_reason "${NODE_ESTIMATED_REASON:-}" \
     --arg yt_ad_free "$YOUTUBE_AD_FREE" \
     --arg yt_cc "$YOUTUBE_DETECTED_CC" \
     --arg geoip_raw "$geoip_lines" \
@@ -4773,7 +5002,18 @@ build_json() {
         disk_io_4k_speed: (if $disk_io_4k != "" and $disk_io_4k != "N/A" then $disk_io_4k else null end),
         disk_io_4k_iops: (if $disk_io_4k_num != "" and $disk_io_4k_num != "null" and $disk_io_4k_num != "N/A" then ($disk_io_4k_num | try tonumber catch null) else null end)
       },
-      location: { country: $country, city: $city, asn: $asn, org: $org },
+      location: {
+        country: $country,
+        city: $city,
+        asn: $asn,
+        org: $org,
+        estimated: (if $est_country != "" then {
+          country: $est_country,
+          city: (if $est_city != "" and $est_city != "Unknown" then $est_city else null end),
+          confidence: $est_conf,
+          reason: $est_reason
+        } else null end)
+      },
       quality: {
         host_type: $host_type,
         ip_type: (if $ip_type != "" then $ip_type else null end),
@@ -4807,6 +5047,11 @@ build_json() {
           city: $nearest_ru_city,
           provider: $nearest_ru_prov,
           latency_ms: (if $nearest_ru_ping != "" and $nearest_ru_ping != "null" then ($nearest_ru_ping | try tonumber catch null) else null end)
+        } else null end),
+        nearest_global_node: (if $nearest_global_city != "" then {
+          country: $nearest_global_cc,
+          city: $nearest_global_city,
+          latency_ms: (if $nearest_global_ping != "" and $nearest_global_ping != "null" then ($nearest_global_ping | try tonumber catch null) else null end)
         } else null end)
       },
       youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
