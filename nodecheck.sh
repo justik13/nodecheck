@@ -17,6 +17,7 @@ SCRIPT_VERSION="4.0.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
+CURL_HAS_HTTP2=$(curl -V 2>/dev/null | grep -qi "HTTP2" && echo "true" || echo "false")
 VERBOSE=false
 DEBUG=false
 JSON_OUTPUT=false
@@ -312,17 +313,14 @@ format_value() {
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
       ;;
-    *"No Captcha"*|*"No captcha"*)
-      color "$COLOR_SUCCESS" "$val"
-      ;;
-    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
-      color "$COLOR_DANGER" "$val"
-      ;;
-    "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*)
+    "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
     *"[Без рекламы"*|*"Без рекламы"*)
       color "$COLOR_SUCCESS" "$val"
+      ;;
+    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
+      color "$COLOR_DANGER" "$val"
       ;;
     *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
       color "$COLOR_WARN" "$val"
@@ -744,6 +742,10 @@ curl_wrapper() {
 
   local curl_cmd=(curl -sS -L -b "" --connect-timeout 2 --max-time "$timeout" --retry "$CURL_RETRIES" --retry-delay 0)
   curl_cmd+=(-A "$USER_AGENT")
+
+  if [[ "$CURL_HAS_HTTP2" == "true" ]]; then
+    curl_cmd+=(--http2)
+  fi
 
   if [[ "$ip_version" == "4" ]]; then
     curl_cmd+=(-4)
@@ -2668,31 +2670,134 @@ lookup_alfabank() {
 }
 
 lookup_avito() {
-  local res
-  res=$(check_ru_site "https://www.avito.ru" 4)
-  if [[ "$res" == *"Qrator"* || "$res" == *"439"* ]]; then
-    echo "Blocked (439 Qrator Captcha)"
+  local resp code
+  resp=$(curl_wrapper GET "https://www.avito.ru" -k -L --max-redirs 5 --timeout 4 -w "\nHTTP_STATUS:%{http_code}")
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  elif [[ "$code" == "439" ]] || LC_ALL=C.UTF-8 grep -qi "pow_challenge" <<<"$resp"; then
+    echo "Yes (Browser / PoW)"
+  elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
+    echo "Yes"
+  elif [[ "$code" == "403" ]]; then
+    echo "Blocked (Qrator 403)"
   else
-    echo "$res"
+    echo "Blocked ($code)"
   fi
 }
 
 lookup_wildberries() {
-  check_ru_site "https://www.wildberries.ru" 4
+  local resp code
+  resp=$(curl_wrapper GET "https://card.wb.ru/cards/v2/detail?appType=1&curr=rub&dest=-1257786&nm=13854851" \
+    --header "Origin: https://www.wildberries.ru" \
+    --header "Referer: https://www.wildberries.ru/" \
+    --timeout 4 -w "\nHTTP_STATUS:%{http_code}")
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  elif [[ "$code" == "200" ]]; then
+    echo "Yes"
+  elif [[ "$code" =~ ^(403|498)$ ]]; then
+    echo "Blocked (Bad IP / Anti-VPN)"
+  else
+    echo "Blocked ($code)"
+  fi
 }
 
 lookup_ozon() {
-  local res
-  res=$(check_ru_site "https://www.ozon.ru" 4)
-  if [[ "$res" == *"Captcha"* || "$res" == *"Geo-restricted"* ]]; then
-    echo "Blocked (Anti-VPN)"
+  local resp code body
+  resp=$(curl_wrapper GET "https://api.ozon.ru/composer-api.bx/page/json/v2" -k \
+    --header "Origin: https://www.ozon.ru" \
+    --header "Referer: https://www.ozon.ru/" \
+    --timeout 4 -w "\nHTTP_STATUS:%{http_code}")
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+  body=$(head -c 8192 <<<"$resp" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  elif [[ "$code" == "200" ]]; then
+    echo "Yes"
+  elif [[ "$code" == "403" ]] || LC_ALL=C.UTF-8 grep -qi -E "blockURL|доступ ограничен|за пределами рф|выключите vpn" <<<"$body"; then
+    echo "Blocked (Bad IP / Anti-VPN)"
   else
-    echo "$res"
+    echo "Blocked ($code)"
   fi
 }
 
 lookup_kinopoisk() {
-  check_ru_site "https://www.kinopoisk.ru" 4
+  local res
+  res=$(check_ru_site "https://www.kinopoisk.ru" 4)
+  if [[ "$res" != "OK" && "$res" != "Yes"* ]]; then
+    echo "$res"
+    return
+  fi
+
+  local cc="${NODE_COUNTRY_CODE^^}"
+  case "$cc" in
+    RU|BY|KZ|AM|KG|UZ)
+      echo "Yes"
+      ;;
+    *)
+      echo "No (DRM Geo-blocked)"
+      ;;
+  esac
+}
+
+lookup_pochta() {
+  local resp code body
+  resp=$(curl_wrapper GET "https://www.pochta.ru" -k -L --max-redirs 5 --timeout 4 -w "\nHTTP_STATUS:%{http_code}")
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+  body=$(head -c 8192 <<<"$resp" | sed -e '/HTTP_STATUS:[0-9]\{3\}$/d')
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  elif [[ "$code" == "417" ]] || LC_ALL=C.UTF-8 grep -qi "вы используете vpn" <<<"$body"; then
+    echo "Blocked (Anti-VPN 417)"
+  elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
+    echo "Yes"
+  else
+    echo "Blocked ($code)"
+  fi
+}
+
+lookup_fssp() {
+  local resp code
+  resp=$(curl_wrapper GET "https://fssp.gov.ru" -k -L --max-redirs 5 --timeout 4 -w "\nHTTP_STATUS:%{http_code}")
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  elif [[ "$code" =~ ^(503|403)$ ]]; then
+    echo "Blocked (Geo-restricted $code)"
+  elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
+    echo "Yes"
+  else
+    echo "Blocked ($code)"
+  fi
+}
+
+lookup_consultant() {
+  local resp code
+  resp=$(curl_wrapper GET "https://www.consultant.ru" -k -L --max-redirs 5 --timeout 4 -w "\nHTTP_STATUS:%{http_code}")
+  code=$(tail -n 2 <<<"$resp" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
+  code="${code:-000}"
+
+  if [[ "$code" == "000" ]]; then
+    echo "Blocked (Timeout / Geo-Drop)"
+  elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
+    echo "Yes"
+  elif [[ "$code" == "403" ]]; then
+    echo "Blocked (403 Forbidden)"
+  else
+    echo "Blocked ($code)"
+  fi
 }
 
 run_ru_local_services_check() {
@@ -2704,6 +2809,9 @@ run_ru_local_services_check() {
     "lookup_nalog" "$s_dir/nalog"
     "lookup_mosru" "$s_dir/mosru"
     "lookup_rzd" "$s_dir/rzd"
+    "lookup_pochta" "$s_dir/pochta"
+    "lookup_fssp" "$s_dir/fssp"
+    "lookup_consultant" "$s_dir/consultant"
     "lookup_yandex" "$s_dir/yandex"
     "lookup_vk" "$s_dir/vk"
     "lookup_sberbank" "$s_dir/sberbank"
@@ -2730,6 +2838,9 @@ run_ru_local_services_check() {
     "ФНС (nalog.gov.ru)"$'\t'"$(read_val "$s_dir/nalog" "Blocked")"
     "Мос.ру (mos.ru)"$'\t'"$(read_val "$s_dir/mosru" "Blocked")"
     "РЖД (ticket.rzd.ru)"$'\t'"$(read_val "$s_dir/rzd" "Blocked")"
+    "Почта России (pochta.ru)"$'\t'"$(read_val "$s_dir/pochta" "Blocked")"
+    "ФССП (fssp.gov.ru)"$'\t'"$(read_val "$s_dir/fssp" "Blocked")"
+    "КонсультантПлюс (consultant.ru)"$'\t'"$(read_val "$s_dir/consultant" "Blocked")"
     "Яндекс (ya.ru)"$'\t'"$(read_val "$s_dir/yandex" "Blocked")"
     "ВКонтакте (vk.com)"$'\t'"$(read_val "$s_dir/vk" "Blocked")"
     "СберБанк (sberbank.ru)"$'\t'"$(read_val "$s_dir/sberbank" "Blocked")"

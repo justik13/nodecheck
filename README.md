@@ -77,9 +77,9 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
    * Нативный обмен пакетами MTProto (`req_pq_multi` / `resPQ`) с шифрованием AES-CTR по порту 443 для всех 5 дата-центров Telegram.
 
 9. **Сервисы РФ (Reverse Geoblocking):**
-   * Проверка доступности через Geo-WAF и Anti-VPN фильтры с ноды: Госуслуги, ФНС, Мос.ру, РЖД, Яндекс, VK.
+   * Проверка доступности через Geo-WAF и Anti-VPN фильтры с ноды: Госуслуги, ФНС, Мос.ру, РЖД, Почта России (Anti-VPN 417), ФССП, КонсультантПлюс, Яндекс, VK.
    * Банки: СберБанк, Т-Банк, ВТБ, Альфа-Банк.
-   * Маркетплейсы: Авито (Qrator Captcha 439), Wildberries (WAF 498), Озон (WAF 403), Кинопоиск.
+   * Маркетплейсы и медиа: Авито (Qrator Browser PoW), Wildberries (Anti-VPN / карточки товаров), Озон (Anti-VPN / mobile API), Кинопоиск (DRM Geo-restriction).
 
 10. **Аудит фильтрации ТСПУ (Censorcheck DPI) и санкционные ресурсы:**
     * **DPI ТСПУ (18 доменов):** раздельный тест HTTP 80 (редиректы) и HTTPS 443 (DPI Drop / TLS сбросы / заглушки РКН 451): YouTube, Discord, Instagram, Facebook, X/Twitter, Rutracker, Amnezia, Outline, Telegram API, Google Play и др.
@@ -187,16 +187,19 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
   ФНС (nalog.gov.ru)                    OK
   Мос.ру (mos.ru)                       OK
   РЖД (ticket.rzd.ru)                   OK
+  Почта России (pochta.ru)              OK
+  ФССП (fssp.gov.ru)                    OK
+  КонсультантПлюс (consultant.ru)       OK
   Яндекс (ya.ru)                        OK
   ВКонтакте (vk.com)                    OK
   СберБанк (sberbank.ru)                OK
   Т-Банк (tbank.ru)                     OK
   ВТБ (vtb.ru)                          OK
   Альфа-Банк (alfabank.ru)              OK
-  Авито (avito.ru)                      Blocked (439 Qrator Captcha)
-  Wildberries (wildberries.ru)          Blocked (WAF 498)
-  Озон (ozon.ru)                        Blocked (WAF 403)
-  Кинопоиск (kinopoisk.ru)              OK
+  Авито (avito.ru)                      Yes (Browser / PoW)
+  Wildberries (wildberries.ru)          Yes
+  Озон (ozon.ru)                        Yes
+  Кинопоиск (kinopoisk.ru)              Yes
 
 4. 🚫 Фильтрация ТСПУ (Censorcheck DPI) и санкционные ресурсы
   [ Censorcheck DPI: 18 сайтов ] [12 блоков из 18 ресурсов под фильтрацией ТСПУ]
