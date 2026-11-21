@@ -1729,11 +1729,11 @@ format_unblock_status() {
   elif [[ "$code" == "000" ]]; then
     echo "No (DPI Drop / Timeout)"
   elif [[ "$code" == "403" ]]; then
-    echo "No (WAF / Geo-403)"
+    echo "WAF / Challenge (403)"
   elif [[ "$code" == "451" ]]; then
     echo "No (RKN Blockpage / 451)"
   elif [[ "$code" == "429" ]]; then
-    echo "No (Captcha / Rate Limit)"
+    echo "Rate Limit / Challenge (429)"
   else
     echo "No ($code)"
   fi
@@ -3948,7 +3948,7 @@ probe_single_geoblocked_site() {
   if [[ "$code" =~ ^(200|206|301|302|307|308|416)$ ]]; then
     echo "Available ($code)" > "$out_file"
   elif [[ "$code" == "403" ]]; then
-    echo "Blocked (Geo-403)" > "$out_file"
+    echo "Blocked (WAF 403)" > "$out_file"
   elif [[ "$code" == "451" ]]; then
     echo "Blocked (Sanctions 451)" > "$out_file"
   elif [[ "$code" == "000" ]]; then
