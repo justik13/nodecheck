@@ -1,17 +1,17 @@
-# 🇷🇺 NodeCheck (RU Edition) — Комплексный аудит нод и сетевого стека под РФ
+# NodeCheck (RU Edition)
 
-Скрипт для глубокого аудита серверных нод (VPS/VDS/Dedicated), сетевого стека, репутации IP, геолокации, скорости и доступности сервисов под аудиторию РФ.
+Скрипт аудита VPS/VDS и выделенных серверов под аудиторию РФ: железо, сетевой стек, репутация IP, геолокация, блокировки и скорость.
 
 [![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
 [![Bash](https://img.shields.io/badge/Bash-4.0%2B-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Zero Traces](https://img.shields.io/badge/Storage-Zero%20Traces%20(Safe)-brightgreen)](#-безопасность-и-чистота-zero-traces)
+[![Zero Traces](https://img.shields.io/badge/Storage-Zero%20Traces%20(Safe)-brightgreen)](#-без-следов-на-диске)
 
 ---
 
-## ⚡️ Быстрый запуск
+## Быстрый запуск
 
-Запуск одной строкой на сервере (чистый Bash, установка сторонних пакетов и компиляция не требуются):
+Запуск одной строкой на сервере (чистый Bash, без компиляции и автоустановки пакетов):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh)
@@ -24,63 +24,63 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 ---
 
-## 🔍 Ключевые возможности
+## Что проверяет скрипт
 
-1. **Железо, CPU Steal и аппаратное шифрование:**
-   * Определение модели процессора, vCPU, RAM, аптайма и виртуализации (KVM/LXC/Bare-Metal).
-   * Замер **CPU Steal %** (выборка в реальном времени + накопленное среднее за весь аптайм ноды).
-   * Тест аппаратного ускорения криптографии (**AES-NI / VAES / ARM CE**) через OpenSSL в GB/s за 1.0 секунду.
+1. **Железо, CPU Steal и шифрование:**
+   * Модель CPU, количество vCPU, объём RAM, аптайм и виртуализацию (KVM/LXC/Bare-Metal).
+   * CPU Steal %: текущую выборку и среднее значение за весь аптайм.
+   * Скорость аппаратного шифрования (AES-NI / VAES / ARM CE) через OpenSSL в GB/s за 1 секунду.
 
-2. **Безопасный бенчмарк и классификатор диска:**
-   * Определение реального типа накопителя (**NVMe SSD, SSD, Virtual Disk, HDD, Container OverlayFS, RAM Disk**) через `lsblk PKNAME` и `rotational`.
-   * Адаптивный бенчмарк последовательной записи (256 МБ с `conv=fdatasync`, 512 МБ при RAM ≥ 2 ГБ, потолок 10с) с вычислением реальной скорости по фактически записанным байтам при таймауте на медленных дисках, защитой от записи в `tmpfs`/`ramfs`, контролем кода завершения `dd` и проверкой наличия свободного места (не менее 2 ГБ и не более 90% заполнения).
+2. **Диск:**
+   * Реальный тип накопителя (NVMe SSD, SSD, Virtual Disk, HDD, Container OverlayFS, RAM Disk) через `lsblk PKNAME` и `rotational`.
+   * Последовательную запись через `dd` с `conv=fdatasync` (256 МБ, либо 512 МБ при RAM ≥ 2 ГБ, лимит 10с). При таймауте считает скорость по фактически записанным байтам, пропускает `tmpfs`/`ramfs` и не запускается, если свободно меньше 2 ГБ или диск заполнен более чем на 90%.
 
 3. **Сетевой стек и BBR:**
-   * Диагностика TCP BBR: статус активности + проверка наличия скомпилированного модуля ядра `tcp_bbr.ko` (`Inactive (Available)`).
-   * Мультисерверная проверка Outbound Port 25 (SMTP пул: Gmail, Outlook, Mail.ru) без ложных срабатываний из-за единичного троттлинга.
-   * Двунаправленный UDP (проверка DNS-резолвинга 1.1.1.1 / 8.8.8.8).
+   * Статус TCP BBR и наличие модуля ядра `tcp_bbr.ko` (`Inactive (Available)`).
+   * Исходящий Port 25 (SMTP: Gmail, Outlook, Mail.ru).
+   * Двунаправленный UDP (DNS-запросы к 1.1.1.1 / 8.8.8.8).
 
-4. **Многоисточниковый консенсус антифрода и определение типа IP (стандарт xykt/IPQuality):**
-   * Параллельный опрос 4 независимых баз (**Scamalytics, AbuseIPDB, IP-API, IPQuery**) за ~350 мс.
-   * Определение типа IP: **Native IP (Локальный)** vs **Broadcast IP (Маршрутизированный)** через сопоставление физической геолокации и RIR (RIPE/ARIN/APNIC).
-   * Консенсусная классификация хоста: `Tor Exit Node` -> `Commercial VPN / Proxy` -> `Data Center / Hosting` -> `Mobile` -> `Residential`.
-   * Проверка на нахождение IP в реестре блокировок Роскомнадзора (**базы Antifilter `ip.lst` и CIDR `ipsum.lst`**).
-   * Прямая проверка триггера **Google Captcha** («Необычный трафик»).
+4. **Антифрод и тип IP (стандарт xykt/IPQuality):**
+   * Параллельный опрос 4 баз (Scamalytics, AbuseIPDB, IP-API, IPQuery) за ~350 мс.
+   * Тип IP: Native IP или Broadcast IP по совпадению физической геолокации и RIR (RIPE/ARIN/APNIC).
+   * Классификация хоста: `Tor Exit Node` -> `Commercial VPN / Proxy` -> `Data Center / Hosting` -> `Mobile` -> `Residential`.
+   * Проверка IP по реестру РКН (базы Antifilter `ip.lst` и CIDR `ipsum.lst`).
+   * Прямой тест триггера Google Captcha («Необычный трафик»).
 
-5. **Параллельный DNSBL-сканер (12 спам-баз):**
-   * Быстрый (~210 мс) параллельный опрос 12 проверенных мировых почтовых черных списков (Barracuda, SpamCop, DroneBL, Surriel PSBL, Mailspike, UCEPROTECT-1, GBUdb, Blocklist.de, s5h, InterServer, 0spam, Nordspam).
-   * Встроенная фильтрация служебных кодов отказа публичных DNS (`127.255.255.*`) и исключение закрытых сервисов (вроде SORBS).
+5. **DNSBL-сканер (12 спам-баз):**
+   * Параллельный опрос 12 почтовых чёрных списков (Barracuda, SpamCop, DroneBL, Surriel PSBL, Mailspike, UCEPROTECT-1, GBUdb, Blocklist.de, s5h, InterServer, 0spam, Nordspam) за ~210 мс.
+   * Отсеивает служебные ответы публичных DNS (`127.255.255.*`) и закрытые списки вроде SORBS.
 
 6. **Консенсус 18 баз GeoIP:**
-   * Одновременный параллельный опрос 18 провайдеров геолокации (IPinfo, Cloudflare, IP-API, IP2Location, 2ip, ipwho.is, ifconfig.co, IPLocation, ipbase, ipquery, IPAPI.is, RIPE NCC, IP.Guide и др.) с подсчетом процента голосов за страну.
+   * Параллельный опрос 18 провайдеров (IPinfo, Cloudflare, IP-API, IP2Location, 2ip, ipwho.is, ifconfig.co, IPLocation, ipbase, ipquery, IPAPI.is, RIPE NCC, IP.Guide и др.) с долей голосов за страну.
 
-7. **Аудит DNS-резолверов и детекция спуфинга (12 резолверов):**
-   * Проверка Cloudflare, Google, Quad9, AdGuard, NextDNS, Yandex по 3 протоколам: **UDP (53)**, **DoH (HTTPS)** и **DoT (TLS 853)**.
-   * Детекция **DNS Hijacking / Spoofing** через сверку эталонных IP для `rutracker.org`.
+7. **DNS-резолверы и спуфинг (12 резолверов):**
+   * Проверка Cloudflare, Google, Quad9, AdGuard, NextDNS и Yandex по UDP (53), DoH (HTTPS) и DoT (TLS 853).
+   * Поиск DNS Hijacking / Spoofing по эталонным IP для `rutracker.org`.
 
-8. **Аудит дата-центров Telegram MTProto (DC1–DC5):**
-   * Нативный обмен пакетами MTProto (`req_pq_multi` / `resPQ`) с шифрованием AES-CTR по порту 443 для всех 5 дата-центров Telegram.
+8. **Дата-центры Telegram MTProto (DC1–DC5):**
+   * Обмен пакетами MTProto (`req_pq_multi` / `resPQ`) с шифрованием AES-CTR по порту 443 для всех 5 DC.
 
 9. **Сервисы РФ (Reverse Geoblocking):**
-   * Проверка доступности через Geo-WAF и Anti-VPN фильтры с ноды: Госуслуги, ФНС, Мос.ру, РЖД, Почта России (Anti-VPN 417), ФССП, КонсультантПлюс, Яндекс, VK.
+   * Госуслуги, ФНС, Мос.ру, РЖД, Почта России (Anti-VPN 417), ФССП, КонсультантПлюс, Яндекс, VK.
    * Банки: СберБанк, Т-Банк, ВТБ, Альфа-Банк.
-   * Маркетплейсы и медиа: Авито (Qrator Browser PoW), Wildberries (Anti-VPN / карточки товаров), Озон (Anti-VPN / mobile API), Кинопоиск (DRM Geo-restriction).
+   * Маркетплейсы и медиа: Авито (Qrator Browser PoW), Wildberries, Озон, Кинопоиск.
 
-10. **Аудит фильтрации ТСПУ (Censorcheck DPI) и санкционные ресурсы:**
-    * **DPI ТСПУ (18 доменов):** раздельный тест HTTP 80 (редиректы) и HTTPS 443 (DPI Drop / TLS сбросы / заглушки РКН 451): YouTube, Discord, Instagram, Facebook, X/Twitter, Rutracker, Amnezia, Outline, Telegram API, Google Play и др.
-    * **Санкционные западные сервисы (10 доменов):** проверка ресурсов, закрытых со стороны Запада для IP из РФ (Spotify, Netflix, Patreon, Swagger, Snyk, MongoDB, Autodesk, Graylog, Redis, MS Copilot).
+10. **Фильтрация ТСПУ (Censorcheck DPI) и санкционные ресурсы:**
+    * DPI ТСПУ (18 доменов): раздельный тест HTTP 80 (редиректы) и HTTPS 443 (DPI Drop, TLS-сбросы, заглушка РКН 451) — YouTube, Discord, Instagram, Facebook, X/Twitter, Rutracker, Amnezia, Outline, Telegram API, Google Play и др.
+    * Санкционные западные сервисы (10 доменов): Spotify, Netflix, Patreon, Swagger, Snyk, MongoDB, Autodesk, Graylog, Redis, MS Copilot.
 
 11. **Стриминги, медиа и AI-сервисы (IP Region 28 + Legend %):**
-    * Точное определение страны, которую видят стриминги и нейросети: Claude AI, OpenAI ChatGPT, Google Gemini, YouTube (включая **YouTube Ad-Free**), TikTok, Disney+, Twitch, JetBrains, Ookla, Microsoft/Bing, Deezer, Steam, PlayStation, Reddit, Apple Services.
-    * Сводная таблица **Legend %** распределения стран среди сервисов.
+    * Определение страны для Claude AI, OpenAI ChatGPT, Google Gemini, YouTube (включая YouTube Ad-Free), TikTok, Disney+, Twitch, JetBrains, Ookla, Microsoft/Bing, Deezer, Steam, PlayStation, Reddit, Apple Services.
+    * Таблица Legend % с долей стран по всем сервисам.
 
 12. **Скорость и связность:**
-    * **Замер скорости ноды:** нативный движок Speedtest by Ookla CLI для зарубежных нод (выгрузка и загрузка до 10 Gbps).
-    * **Дуплексный iPerf3 по 7 макро-регионам РФ:** пинг и реальная пропускная способность (↓ DL / ↑ UL) до 21 узла в Москве, СПб, Казани, Нижнем Новгороде, Самаре, Ростове-на-Дону, Волгограде, Астрахани, Екатеринбурге/Урале, Новосибирске и Иркутске/Якутске.
+    * Зарубежные ноды: Speedtest by Ookla CLI (до 10 Gbps).
+    * Ноды в РФ и связность с Россией: дуплексный iPerf3 и пинг по 7 макро-регионам (21 узел в Москве, СПб, Казани, Нижнем Новгороде, Самаре, Ростове-на-Дону, Волгограде, Астрахани, Екатеринбурге/Урале, Новосибирске и Иркутске/Якутске).
 
 ---
 
-## 🖥 Пример вывода
+## Пример вывода
 
 ```text
 +------------------------------------------------------------------------------+
@@ -306,26 +306,24 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 ---
 
-## ⚙️ Управление и требования
+## Управление и требования
 
-Скрипт ориентирован на **Ubuntu 24.04 LTS** и запускается без CLI-флагов:
+Скрипт рассчитан на Ubuntu 24.04 LTS и запускается без CLI-флагов.
 
-* **Zero-Mutation проверка зависимостей:** скрипт проверяет наличие `curl`, `jq`, `awk` и при их отсутствии выводит точную команду `apt-get install -y ...`, не модифицируя систему.
-* **Отключение цветов:** стандартная переменная окружения `NO_COLOR=1`.
-* **Интерактивный пропуск iPerf3:** перед и во время замера iPerf3 по регионам РФ можно нажать `Enter`, `Space` или `s` для пропуска этого этапа.
-* **Маскирование IP:** внешние IPv4/IPv6 в шапке отчёта автоматически маскируются (`*.*`).
-
----
-
-## 🔒 Безопасность и чистота (Zero Traces)
-
-* **Изолированная среда:** все временные данные сессии хранятся в защищенной директории `/tmp/nodecheck.$PID.*`.
-* **Песочница конфигураций:** для сторонних бинарников (включая Ookla Speedtest) принудительно устанавливается `XDG_CONFIG_HOME="$TMP_WORK_DIR"`, что исключает создание служебных директорий в домашнем каталоге (`~/.config/ookla`).
-* **Гарантированная очистка:** при штатном завершении, прерывании через `Ctrl+C` или аварийном выходе срабатывает глобальный обработчик сигналов `trap cleanup EXIT INT TERM`, немедленно удаляющий тестовые файлы дискового бенчмарка и 100% временных директорий.
-* **Безопасность системы:** скрипт не модифицирует настройки системы, не меняет системные конфигурации сети, изолированно читает метаданные дистрибутива без выполнения стороннего кода через `source` и не оставляет следов на диске.
+* Если не хватает `curl`, `jq` или `awk`, скрипт выводит команду `apt-get install -y ...` и завершается, ничего не устанавливая сам.
+* Для отключения ANSI-цветов поддерживается переменная окружения `NO_COLOR=1`.
+* Замер iPerf3 по регионам РФ можно пропустить нажатием `Enter`, `Space` или `s`.
+* Внешние IPv4 и IPv6 в шапке отчёта автоматически маскируются (`*.*`).
 
 ---
 
-## 📄 Лицензия
+## Без следов на диске
 
-Проект распространяется под лицензией [MIT](LICENSE).
+* Временные файлы хранятся в `/tmp/nodecheck.$PID.*` с правами `700`.
+* Для Speedtest CLI задаётся `XDG_CONFIG_HOME="$TMP_WORK_DIR"`, чтобы он не создавал `~/.config/ookla`.
+* Обработчик `trap cleanup` удаляет `/tmp/nodecheck.*` и тестовый файл `dd` при обычном выходе, ошибке или `Ctrl+C`.
+* Скрипт не меняет системные и сетевые настройки и читает `/etc/os-release` без `source`.
+
+---
+
+Лицензия: [MIT](LICENSE).
