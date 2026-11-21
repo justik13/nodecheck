@@ -319,7 +319,7 @@ format_value() {
     *"[Без рекламы"*|*"Без рекламы"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
-    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
+    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Conn Refused"*|*"DNS Error"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
       color "$COLOR_DANGER" "$val"
       ;;
     *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
@@ -913,7 +913,7 @@ query_single_dnsbl() {
   if is_command_available "dig"; then
     out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   elif is_command_available "nslookup"; then
-    out=$(nslookup -timeout=2 "${rev_ip}.${z}" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2; exit}')
+    out=$(nslookup -timeout=2 "${rev_ip}.${z}" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
   fi
   if [[ -z "$out" || "$out" == *";;"* || "$out" =~ ^127\.255\.255\. ]]; then
     echo "clean" > "$out_file"
@@ -2498,7 +2498,7 @@ lookup_playstation() {
   raw=$(curl_wrapper GET "https://www.playstation.com" --timeout 4 -D - -o /dev/null 2>/dev/null)
   cc=$(grep -i -oE 'country=[A-Za-z]{2}' <<<"$raw" 2>/dev/null | head -n1 | cut -d= -f2)
   if [[ -z "$cc" ]]; then
-    cc=$(grep -i -oE 'location: .*/([a-z]{2})-[a-z]{2}/' <<<"$raw" 2>/dev/null | sed -n -E 's|.*/([a-z]{2})-[a-z]{2}/.*|\1|p' | head -n1)
+    cc=$(grep -i -oE 'location: .*/[a-zA-Z]{2}-[a-zA-Z]{2}/' <<<"$raw" 2>/dev/null | sed -n -E 's|.*/[a-zA-Z]{2}-([a-zA-Z]{2})/.*|\1|p' | head -n1)
   fi
   if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
     echo "${cc^^}"
@@ -3177,13 +3177,17 @@ iperf_stream_test() {
       iperf_ver_flag+=(-4)
     fi
     if [[ -n "$INTERFACE_NAME" ]]; then
-      iperf_ver_flag+=("-B" "$INTERFACE_NAME")
+      if [[ "$INTERFACE_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "$INTERFACE_NAME" == *:* ]]; then
+        iperf_ver_flag+=("-B" "$INTERFACE_NAME")
+      else
+        iperf_ver_flag+=("--bind-dev" "$INTERFACE_NAME")
+      fi
     fi
 
     local raw_out="$TMP_WORK_DIR/iperf_raw.log"
     : > "$raw_out"
 
-    timeout $((test_time + 4)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 > "$raw_out" 2>&1 &
+    timeout $((test_time + 4)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" --connect-timeout 2000 -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 > "$raw_out" 2>&1 &
     local iperf_pid=$!
     local start_sec=$SECONDS
     local last_line=0
@@ -3577,7 +3581,7 @@ run_region_speed_test() {
     fi
 
     ((port_attempts++))
-    if (( port_attempts > 3 )); then
+    if (( port_attempts > 5 )); then
       break
     fi
 
@@ -4244,29 +4248,29 @@ measure_ookla_speedtest() {
 # ------------------------------------------------------------------------------
 
 format_table() {
-  if is_command_available "column"; then
-    column -t -s $'\t'
-  else
-    LC_ALL=C.UTF-8 awk -F '\t' '{
-      for (i=1; i<=NF; i++) {
-        clean = $i; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
-        if (length(clean) > w[i]) w[i] = length(clean)
-      }
-      rows[NR] = $0
+  LC_ALL=C awk -F '\t' '{
+    for (i=1; i<=NF; i++) {
+      clean = $i
+      gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
+      gsub(/[\200-\277]/, "", clean)
+      if (length(clean) > w[i]) w[i] = length(clean)
     }
-    END {
-      for (r=1; r<=NR; r++) {
-        n = split(rows[r], cols, "\t")
-        line = ""
-        for (i=1; i<=n; i++) {
-          clean = cols[i]; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
-          pad = w[i] - length(clean) + 2
-          line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
-        }
-        print line
+    rows[NR] = $0
+  }
+  END {
+    for (r=1; r<=NR; r++) {
+      n = split(rows[r], cols, "\t")
+      line = ""
+      for (i=1; i<=n; i++) {
+        clean = cols[i]
+        gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
+        gsub(/[\200-\277]/, "", clean)
+        pad = w[i] - length(clean) + 2
+        line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
       }
-    }'
-  fi
+      print line
+    }
+  }'
 }
 
 # ==============================================================================
@@ -4439,7 +4443,7 @@ probe_single_dns_resolver() {
       udp="Available"
     fi
   elif is_command_available "nslookup"; then
-    if nslookup -timeout=2 cloudflare.com "$ip" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2; exit}' | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    if nslookup -timeout=2 cloudflare.com "$ip" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2}' | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
       udp="Available"
     fi
   fi
@@ -4455,13 +4459,19 @@ probe_single_dns_resolver() {
     77.88.8.8|77.88.8.1) doh_host="common.dot.dns.yandex.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
   esac
   if [[ -n "$doh_endpoint" ]]; then
-    local dns_b64="AAABAAABAAAAAAAAAmNsb3VkZmxhcmUDY29tAAABAAE" # cloudflare.com IN A
+    local dns_b64="AAABAAABAAAAAAAACmNsb3VkZmxhcmUDY29tAAABAAE" # cloudflare.com IN A
     local doh_cmd=(curl -sS -m 3 --connect-timeout 2 -o /dev/null \
       --resolve "${doh_host}:443:${ip}" \
       -w "%{http_code}:%{content_type}" \
       -H "accept: application/dns-message")
     if [[ "$CURL_HAS_HTTP2" == "true" ]]; then
       doh_cmd+=(--http2)
+    fi
+    if [[ -n "$PROXY_ADDR" ]]; then
+      doh_cmd+=(--proxy "socks5h://$PROXY_ADDR")
+    fi
+    if [[ -n "$INTERFACE_NAME" ]]; then
+      doh_cmd+=(--interface "$INTERFACE_NAME")
     fi
     local doh_res
     doh_res=$("${doh_cmd[@]}" "${doh_endpoint}?dns=${dns_b64}" 2>/dev/null)
@@ -4485,7 +4495,7 @@ probe_single_dns_resolver() {
     if is_command_available "dig"; then
       ans=$(dig +short +time=2 +tries=1 @"$ip" rutracker.org A 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
     elif is_command_available "nslookup"; then
-      ans=$(nslookup -timeout=2 rutracker.org "$ip" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2; exit}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+      ans=$(nslookup -timeout=2 rutracker.org "$ip" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
     fi
 
     if [[ -z "$ans" ]]; then
@@ -4634,6 +4644,9 @@ probe_single_dpi_site() {
   elif [[ "$IPV6_ONLY" == "true" ]]; then
     base_curl+=(-6)
   fi
+  if [[ "$USE_DOH" == "true" && -n "$SELECTED_DOH_URL" ]]; then
+    base_curl+=(--doh-url "$SELECTED_DOH_URL")
+  fi
   if [[ -n "$PROXY_ADDR" ]]; then
     base_curl+=(--proxy "socks5h://$PROXY_ADDR")
   fi
@@ -4685,7 +4698,7 @@ probe_single_dpi_site() {
   elif [[ "$https_exit" -eq 35 || "$https_exit" -eq 56 ]]; then
     https_res="DPI Reset"
   elif [[ "$https_exit" -eq 28 ]]; then
-    if awk "BEGIN {exit !($https_conn > 0 && $https_tls == 0)}" 2>/dev/null; then
+    if [[ -z "$PROXY_ADDR" ]] && awk "BEGIN {exit !($https_conn > 0 && $https_tls == 0)}" 2>/dev/null; then
       https_res="DPI Drop"
     else
       https_res="Timeout"
@@ -4710,6 +4723,9 @@ probe_single_geoblocked_site() {
     base_curl+=(-4)
   elif [[ "$IPV6_ONLY" == "true" ]]; then
     base_curl+=(-6)
+  fi
+  if [[ "$USE_DOH" == "true" && -n "$SELECTED_DOH_URL" ]]; then
+    base_curl+=(--doh-url "$SELECTED_DOH_URL")
   fi
   if [[ -n "$PROXY_ADDR" ]]; then
     base_curl+=(--proxy "socks5h://$PROXY_ADDR")
@@ -5128,7 +5144,7 @@ print_western_unblock_table() {
   for row in "${ARR_RU_UNBLOCK[@]}"; do
     IFS=$'\t' read -r _ val <<<"$row"
     local c=""
-    if [[ "$val" =~ \(([A-Z]{2}) ]]; then
+    if [[ "$val" =~ \(([A-Z]{2})(\)|[[:space:]]|-) ]]; then
       c="${BASH_REMATCH[1]}"
     elif [[ "$val" =~ ^([A-Z]{2})([[:space:]]|$) ]]; then
       c="${BASH_REMATCH[1]}"
