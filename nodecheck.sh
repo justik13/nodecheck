@@ -2338,7 +2338,7 @@ lookup_ozon() {
 
   if [[ "$code" == "000" ]]; then
     echo "Blocked (Timeout / Geo-Drop)"
-  elif LC_ALL=C.UTF-8 grep -qi -E "blockURL|доступ ограничен|за пределами рф|выключите vpn" <<<"$body"; then
+  elif LC_ALL=C.UTF-8 grep -qi -E "доступ ограничен|за пределами рф|выключите vpn" <<<"$body"; then
     echo "Blocked (Anti-VPN / Geo)"
   elif [[ "$code" == "403" ]] || [[ "$body" == *"incidentId"* ]]; then
     echo "Challenge (Antibot ${code})"
@@ -2696,6 +2696,7 @@ iperf_stream_test() {
           if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
             IPERF_SKIPPED=true
             { kill -TERM "$iperf_pid" 2>/dev/null; sleep 0.05; kill -KILL "$iperf_pid" 2>/dev/null; wait "$iperf_pid" 2>/dev/null; } 2>/dev/null || true
+            iperf_pid=""
             break
           fi
         fi
@@ -2741,6 +2742,7 @@ iperf_stream_test() {
 
       if (( SECONDS - start_sec > test_time + 4 )); then
         { kill -TERM "$iperf_pid" 2>/dev/null; sleep 0.05; kill -KILL "$iperf_pid" 2>/dev/null; wait "$iperf_pid" 2>/dev/null; } 2>/dev/null || true
+        iperf_pid=""
         break
       fi
     done
