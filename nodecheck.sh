@@ -257,7 +257,7 @@ format_value() {
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
       ;;
-    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*|*"Пропущено"*|*"Busy"*)
+    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*|*"Пропущено"*|*"Busy"*|*"Challenge"*|*"Antibot"*)
       color "$COLOR_WARN" "$val"
       ;;
     "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*|*"Available"*)
@@ -541,6 +541,10 @@ extract_http_status() {
   local c
   c=$(tail -n 3 <<<"$1" | grep -oE 'HTTP_STATUS:[0-9]{3}' | tail -n 1 | cut -d: -f2)
   echo "${c:-000}"
+}
+
+extract_effective_url() {
+  tail -n 3 <<<"$1" | grep -oE 'EFFECTIVE_URL:[^[:space:]]+' | tail -n 1 | cut -d: -f2-
 }
 
 strip_http_status() {
@@ -914,7 +918,7 @@ get_vpn_node_info() {
   local g_search="" g_code="" g_url=""
   [[ -s "$captcha_file" ]] && g_search=$(<"$captcha_file")
   g_code=$(extract_http_status "$g_search")
-  g_url=$(tail -n 3 <<<"$g_search" | grep -oE 'EFFECTIVE_URL:[^\r\n]+' | tail -n 1 | cut -d: -f2-)
+  g_url=$(extract_effective_url "$g_search")
   if [[ -z "$g_search" || "$g_code" == "000" ]]; then
     NODE_CAPTCHA_STATUS="N/A (Timeout)"
     NODE_CAPTCHA_COLOR="$COLOR_NULL"
@@ -1792,9 +1796,16 @@ lookup_chatgpt() {
 }
 
 lookup_claude() {
-  local code
-  code=$(curl_http_code "https://claude.ai")
-  format_unblock_status "$code"
+  local raw code eff_url
+  raw=$(curl_wrapper GET "https://claude.ai" --timeout 4 -o /dev/null -w "HTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" 2>/dev/null)
+  code=$(extract_http_status "$raw")
+  eff_url=$(extract_effective_url "$raw")
+
+  if [[ "$eff_url" == *"app-unavailable-in-region"* || "$eff_url" == *"unavailable"* ]]; then
+    echo "No (Region blocked)"
+  else
+    format_unblock_status "$code"
+  fi
 }
 
 lookup_google() {
@@ -2018,7 +2029,7 @@ lookup_netflix() {
     --header "Accept-Language: en-US,en;q=0.9" \
     -w "\nHTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" 2>/dev/null)
   code1=$(extract_http_status "$raw1")
-  url1=$(tail -n 3 <<<"$raw1" | grep -oE 'EFFECTIVE_URL:[^\r\n]+' | tail -n 1 | cut -d: -f2-)
+  url1=$(extract_effective_url "$raw1")
 
   if [[ "$code1" =~ ^(403|000)$ ]] || [[ "$url1" == *"80018499"* ]] || grep -qi -E "Oh no!|unblocker or proxy|title/80018499" <<<"$raw1"; then
     echo "No"
@@ -2042,7 +2053,7 @@ lookup_netflix() {
     --header "Accept-Language: en-US,en;q=0.9" \
     -w "\nHTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" 2>/dev/null)
   code2=$(extract_http_status "$raw2")
-  url2=$(tail -n 3 <<<"$raw2" | grep -oE 'EFFECTIVE_URL:[^\r\n]+' | tail -n 1 | cut -d: -f2-)
+  url2=$(extract_effective_url "$raw2")
 
   if [[ "$code2" =~ ^(200|301|302|307|308)$ ]] && [[ "$url2" != *"80018499"* ]] && ! grep -qi -E "Oh no!|unblocker or proxy|title/80018499" <<<"$raw2"; then
     if [[ -n "$cc" ]]; then
@@ -2130,7 +2141,7 @@ lookup_google_search_captcha() {
     raw=$(curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 -w "\nHTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" 2>/dev/null)
   fi
   g_code=$(extract_http_status "$raw")
-  g_url=$(tail -n 3 <<<"$raw" | grep -oE 'EFFECTIVE_URL:[^\r\n]+' | tail -n 1 | cut -d: -f2-)
+  g_url=$(extract_effective_url "$raw")
   if [[ -z "$raw" || "$g_code" == "000" ]]; then
     echo "N/A (Timeout)"
   elif [[ "$g_code" == "429" || "$g_url" == *"/sorry/"* || "$raw" == *"/sorry/"* || "$raw" == *"recaptcha"* || "$raw" == *"unusual traffic"* || "$raw" == *"our systems have detected"* ]]; then
@@ -2288,6 +2299,8 @@ lookup_avito() {
     echo "Yes (Browser / PoW)"
   elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
     echo "Yes"
+  elif [[ "$code" == "429" ]]; then
+    echo "Challenge (Qrator 429)"
   elif [[ "$code" == "403" ]]; then
     echo "Blocked (Qrator 403)"
   else
@@ -2308,7 +2321,7 @@ lookup_wildberries() {
   elif [[ "$code" == "200" ]]; then
     echo "Yes"
   elif [[ "$code" =~ ^(403|498)$ ]]; then
-    echo "Blocked (Bad IP / Anti-VPN)"
+    echo "Challenge / Anti-VPN ($code)"
   else
     echo "Blocked ($code)"
   fi
@@ -2325,8 +2338,10 @@ lookup_ozon() {
 
   if [[ "$code" == "000" ]]; then
     echo "Blocked (Timeout / Geo-Drop)"
-  elif [[ "$code" == "403" ]] || LC_ALL=C.UTF-8 grep -qi -E "blockURL|доступ ограничен|за пределами рф|выключите vpn" <<<"$body"; then
-    echo "Blocked (Bad IP / Anti-VPN)"
+  elif LC_ALL=C.UTF-8 grep -qi -E "blockURL|доступ ограничен|за пределами рф|выключите vpn" <<<"$body"; then
+    echo "Blocked (Anti-VPN / Geo)"
+  elif [[ "$code" == "403" ]] || [[ "$body" == *"incidentId"* ]]; then
+    echo "Challenge (Antibot ${code})"
   elif [[ "$code" == "200" ]]; then
     echo "Yes"
   else
@@ -3602,6 +3617,7 @@ mtproto_exchange() {
 }
 
 probe_single_telegram_dc() {
+  exec 2>/dev/null
   local dc_name="$1" dc_ip="$2" dc_num="$3" out_file="$4"
   if ! is_command_available "openssl" || ! is_command_available "od" || ! is_command_available "tac" || ! is_command_available "fold"; then
     if timeout 2 bash -c "true >/dev/tcp/$dc_ip/443" 2>/dev/null; then
