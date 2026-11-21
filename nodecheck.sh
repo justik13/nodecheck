@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# NodeCheck (RU Edition) v4.0.0-ru
+# NodeCheck (RU Edition) v4.1.0-ru
 # Comprehensive Node Hardware, Network Quality, Geolocation & Access Auditor
 # Tailored for Russian Federation Network Realities (Reverse Geoblocking / Multi-Region)
 #
@@ -13,7 +13,7 @@ set -o pipefail
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
-SCRIPT_VERSION="4.0.0-ru"
+SCRIPT_VERSION="4.1.0-ru"
 
 CURL_TIMEOUT=4
 CURL_RETRIES=0
@@ -313,13 +313,13 @@ format_value() {
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
       ;;
-    "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*)
+    "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*|*"Available"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
     *"[Без рекламы"*|*"Без рекламы"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
-    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
+    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
       color "$COLOR_DANGER" "$val"
       ;;
     *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
@@ -606,15 +606,62 @@ install_dependencies() {
     sudo_prefix="sudo "
   fi
 
-  local install_cmd="${sudo_prefix}apt-get update && ${sudo_prefix}apt-get install -y --no-install-recommends ${missing_required[*]}"
+  local pkg_mgr="apt-get"
+  if is_command_available "apt-get"; then
+    pkg_mgr="apt-get"
+  elif is_command_available "dnf"; then
+    pkg_mgr="dnf"
+  elif is_command_available "yum"; then
+    pkg_mgr="yum"
+  elif is_command_available "apk"; then
+    pkg_mgr="apk"
+  elif is_command_available "pacman"; then
+    pkg_mgr="pacman"
+  fi
+
+  local install_cmd=""
+  case "$pkg_mgr" in
+    dnf)
+      install_cmd="${sudo_prefix}dnf install -y ${missing_required[*]}"
+      ;;
+    yum)
+      install_cmd="${sudo_prefix}yum install -y ${missing_required[*]}"
+      ;;
+    apk)
+      install_cmd="${sudo_prefix}apk add --no-cache ${missing_required[*]}"
+      ;;
+    pacman)
+      install_cmd="${sudo_prefix}pacman -Sy --noconfirm ${missing_required[*]}"
+      ;;
+    *)
+      install_cmd="${sudo_prefix}apt-get update && ${sudo_prefix}apt-get install -y --no-install-recommends ${missing_required[*]}"
+      ;;
+  esac
 
   if [[ "$INSTALL_DEPS" == "true" ]]; then
     progress_status "Установка недостающих пакетов (${missing_required[*]})"
     log "INFO" "Installing missing packages with user consent: ${missing_required[*]}"
-    export DEBIAN_FRONTEND=noninteractive
-    ${sudo_prefix}apt-get update -qq >/dev/null 2>&1 || true
-    ${sudo_prefix}apt-get install -y -qq --no-install-recommends "${missing_required[@]}" >/dev/null 2>&1 || true
-    ${sudo_prefix}apt-get clean >/dev/null 2>&1 || true
+    case "$pkg_mgr" in
+      dnf)
+        ${sudo_prefix}dnf install -y -q "${missing_required[@]}" >/dev/null 2>&1 || true
+        ;;
+      yum)
+        ${sudo_prefix}yum install -y -q "${missing_required[@]}" >/dev/null 2>&1 || true
+        ;;
+      apk)
+        ${sudo_prefix}apk add --no-cache "${missing_required[@]}" >/dev/null 2>&1 || true
+        ;;
+      pacman)
+        ${sudo_prefix}pacman -Sy --noconfirm "${missing_required[@]}" >/dev/null 2>&1 || true
+        ;;
+      *)
+        export DEBIAN_FRONTEND=noninteractive
+        ${sudo_prefix}apt-get update -qq >/dev/null 2>&1 || true
+        ${sudo_prefix}apt-get install -y -qq --no-install-recommends "${missing_required[@]}" >/dev/null 2>&1 || true
+        ${sudo_prefix}apt-get clean >/dev/null 2>&1 || true
+        ;;
+    esac
+    CURL_HAS_HTTP2=$(curl -V 2>/dev/null | grep -qi "HTTP2" && echo "true" || echo "false")
     progress_clear
   else
     # Zero-Mutation policy: Never modify production system state without explicit --install-deps flag
@@ -776,7 +823,7 @@ curl_http_code() {
   local url="$1"
   shift
   local res
-  res=$(curl_wrapper GET "$url" -o /dev/null -w "%{http_code}" "$@" 2>/dev/null)
+  res=$(curl_wrapper GET "$url" -o /dev/null -w "%{http_code}" -r 0-4095 "$@" 2>/dev/null)
   echo "${res:-000}"
 }
 
@@ -827,8 +874,7 @@ discover_external_ips() {
 mask_ipv4() {
   local ip="$1"
   local a b c d
-  local IFS=.
-  read -r a b c d <<< "$ip"
+  IFS=. read -r a b c d <<< "$ip"
   if [[ -n "$a" && -n "$b" && -n "$c" && -n "$d" ]]; then
     echo "${a}.${b}.*.*"
   else
@@ -867,7 +913,7 @@ query_single_dnsbl() {
   if is_command_available "dig"; then
     out=$(dig +short +time=2 +tries=1 "${rev_ip}.${z}" A 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
   elif is_command_available "nslookup"; then
-    out=$(nslookup -timeout=2 "${rev_ip}.${z}" 2>/dev/null | awk '/Address:/ {print $2}' | tail -n 1)
+    out=$(nslookup -timeout=2 "${rev_ip}.${z}" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2; exit}')
   fi
   if [[ -z "$out" || "$out" == *";;"* || "$out" =~ ^127\.255\.255\. ]]; then
     echo "clean" > "$out_file"
@@ -1111,7 +1157,7 @@ get_vpn_node_info() {
   if [[ -z "$g_search" ]]; then
     NODE_CAPTCHA_STATUS="N/A (Timeout)"
     NODE_CAPTCHA_COLOR="$COLOR_NULL"
-  elif [[ "$g_search" == *"recaptcha"* || "$g_search" == *"unusual traffic"* || "$g_search" == *"our systems have detected"* ]]; then
+  elif [[ "$g_search" == *"/sorry/"* || "$g_search" == *"recaptcha"* || "$g_search" == *"unusual traffic"* || "$g_search" == *"our systems have detected"* ]]; then
     NODE_CAPTCHA_STATUS="Triggered (Captcha)"
     NODE_CAPTCHA_COLOR="$COLOR_DANGER"
   else
@@ -1182,16 +1228,16 @@ get_vpn_node_info() {
     local ip_list_ok=false
     local ipsum_list_ok=false
 
-    if [[ -s "$rkn_ip_file" ]]; then
+    if [[ -s "$rkn_ip_file" ]] && grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$rkn_ip_file"; then
       ip_list_ok=true
-      if grep -Fxq "$EXTERNAL_IPV4" "$rkn_ip_file"; then
+      if tr -d '\r' < "$rkn_ip_file" | grep -Fxq "$EXTERNAL_IPV4"; then
         rkn_hit=true
       fi
     fi
 
-    if [[ "$rkn_hit" != "true" && -s "$rkn_sum_file" ]]; then
+    if [[ "$rkn_hit" != "true" && -s "$rkn_sum_file" ]] && grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$rkn_sum_file"; then
       ipsum_list_ok=true
-      if awk -v ip="$EXTERNAL_IPV4" '
+      if tr -d '\r' < "$rkn_sum_file" | awk -v ip="$EXTERNAL_IPV4" '
         function ip2int(s, oct, n) {
           n = split(s, oct, ".")
           if (n != 4) return -1
@@ -1246,8 +1292,7 @@ get_vpn_node_info() {
       mkdir -p "$d_dir" 2>/dev/null || true
 
       local a b c d
-      local IFS=.
-      read -r a b c d <<< "$EXTERNAL_IPV4"
+      IFS=. read -r a b c d <<< "$EXTERNAL_IPV4"
       local rev_ip="$d.$c.$b.$a"
 
       local dnsbl_zones=(
@@ -1265,8 +1310,14 @@ get_vpn_node_info() {
         "bl.nordspam.com:Nordspam"
       )
 
+      local running=0 max_jobs=6
       for item in "${dnsbl_zones[@]}"; do
         query_single_dnsbl "$rev_ip" "${item%%:*}" "${item#*:}" "$d_dir/${item#*:}" &
+        ((running++))
+        if (( running >= max_jobs )); then
+          wait -n 2>/dev/null || true
+          ((running--))
+        fi
       done
       wait
 
@@ -1427,14 +1478,14 @@ measure_disk_io() {
     return 0
   fi
 
-  # 1. Protection: Check free space in MB (abort if < 2 GB free)
+  # 1. Protection: Check free space in MB (abort if < 512 MB free)
   local freespace_mb
   freespace_mb=$(df -m -P "$target_dir" 2>/dev/null | awk 'END {print $4}')
-  if [[ -z "$freespace_mb" || ! "$freespace_mb" =~ ^[0-9]+$ ]] || (( freespace_mb < 2048 )); then
-    NODE_DISK_IO="Skipped (< 2 GB free)"
+  if [[ -z "$freespace_mb" || ! "$freespace_mb" =~ ^[0-9]+$ ]] || (( freespace_mb < 512 )); then
+    NODE_DISK_IO="Skipped (< 512 MB free)"
     NODE_DISK_IO_NUM="null"
     NODE_DISK_IO_STATUS="skipped"
-    NODE_DISK_IO_MSG="Less than 2 GB free space available"
+    NODE_DISK_IO_MSG="Less than 512 MB free space available"
     NODE_DISK_IO_4K="N/A"
     NODE_DISK_IO_4K_NUM="null"
     return 0
@@ -1453,7 +1504,8 @@ measure_disk_io() {
     return 0
   fi
 
-  # 3. Adaptive 1 GB sequential write test (bench.sh standard with 10s ceiling)
+  # 3. Safe 256 MB sequential write test (10s ceiling)
+  local io_blocks=256
   local test_file="$target_dir/nodecheck_io_$$.tmp"
   CURRENT_DISK_TEST_FILE="$test_file"
   local dd_out dd_exit=0
@@ -1464,7 +1516,7 @@ measure_disk_io() {
     t_start_ns=$(date +%s 2>/dev/null || echo "0")
   fi
 
-  dd_out=$(timeout 10 dd if=/dev/zero of="$test_file" bs=1M count=1024 conv=fdatasync 2>&1) || dd_exit=$?
+  dd_out=$(timeout 10 dd if=/dev/zero of="$test_file" bs=1M count=$io_blocks conv=fdatasync 2>&1) || dd_exit=$?
 
   t_end_ns=$(date +%s%N 2>/dev/null || true)
   if [[ -z "$t_end_ns" || "$t_end_ns" == *N* ]]; then
@@ -1507,7 +1559,7 @@ measure_disk_io() {
       NODE_DISK_IO_MSG=""
     else
       local speed_mbs
-      speed_mbs=$(awk -v t="$elapsed_sec" 'BEGIN { if (t > 0) printf "%.1f", 1024 / t; else print "0" }')
+      speed_mbs=$(awk -v t="$elapsed_sec" -v b="$io_blocks" 'BEGIN { if (t > 0) printf "%.1f", b / t; else print "0" }')
       local mb_int="${speed_mbs%%.*}"
       if (( mb_int >= 1000 )); then
         NODE_DISK_IO="$(awk -v m="$speed_mbs" 'BEGIN { printf "%.2f GB/s", m / 1024 }')"
@@ -1763,17 +1815,14 @@ get_system_specs() {
     NODE_CPU_STEAL_ALLTIME="0.00"
   fi
 
-  local steal_int="${NODE_CPU_STEAL_NUM%%.*}"
-  steal_int="${steal_int//[^0-9]/}"
-  steal_int="${steal_int:-0}"
-  local alltime_int="${NODE_CPU_STEAL_ALLTIME%%.*}"
-  alltime_int="${alltime_int//[^0-9]/}"
-  alltime_int="${alltime_int:-0}"
+  local steal_tenths alltime_tenths
+  steal_tenths=$(awk -v s="${NODE_CPU_STEAL_NUM:-0}" 'BEGIN { printf "%d", s * 10 }')
+  alltime_tenths=$(awk -v s="${NODE_CPU_STEAL_ALLTIME:-0}" 'BEGIN { printf "%d", s * 10 }')
 
-  if (( steal_int > 10 || alltime_int > 5 )); then
+  if (( steal_tenths > 100 || alltime_tenths > 50 )); then
     NODE_CPU_STEAL_COLOR="$COLOR_DANGER"
     NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (High Steal / Оверселл!) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
-  elif (( steal_int > 3 || alltime_int > 2 )); then
+  elif (( steal_tenths >= 30 || alltime_tenths >= 20 )); then
     NODE_CPU_STEAL_COLOR="$COLOR_WARN"
     NODE_CPU_STEAL="${NODE_CPU_STEAL_NUM}% (Moderate) | ${NODE_CPU_STEAL_ALLTIME}% (за аптайм)"
   else
@@ -2075,7 +2124,7 @@ apply_geoip_consensus_to_header() {
 
 format_unblock_status() {
   local code="$1"
-  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
+  if [[ "$code" =~ ^(200|206|301|302|307|308)$ ]]; then
     echo "Yes"
   elif [[ "$code" == "000" ]]; then
     echo "No (DPI Drop / Timeout)"
@@ -2275,9 +2324,8 @@ parse_youtube_cdn_iata() {
   local google_node_regex='^([a-z]{3})[0-9]'
   local isp_iata_regex='^[a-z]+-([a-z]{3})[0-9]'
   local ggc_dash_regex='^[a-z]{2}-([a-z]{3})-'
-  local ggc_node_regex='^[a-z]{2}([a-z]{3})[a-z]-[a-z0-9]+$'
 
-  if [[ "$node" =~ $google_node_regex || "$node" =~ $isp_iata_regex || "$node" =~ $ggc_dash_regex || "$node" =~ $ggc_node_regex ]]; then
+  if [[ "$node" =~ $google_node_regex || "$node" =~ $isp_iata_regex || "$node" =~ $ggc_dash_regex ]]; then
     echo "${BASH_REMATCH[1]^^}"
   fi
 }
@@ -2326,6 +2374,10 @@ lookup_youtube_premium() {
 }
 
 lookup_youtube_music() {
+  if [[ "$YOUTUBE_DETECTED_CC" == "RU" || "$YOUTUBE_AD_FREE" == "true" ]]; then
+    echo "No"
+    return
+  fi
   local raw resp code
   raw=$(curl_wrapper GET "https://music.youtube.com/" \
     --header "Cookie: SOCS=$YOUTUBE_SOCS_COOKIE" \
@@ -2431,8 +2483,8 @@ lookup_apple() {
 
 lookup_steam() {
   local raw cc code
-  raw=$(curl_wrapper GET "https://store.steampowered.com" --timeout 4 -c - 2>/dev/null)
-  cc=$(grep -oE 'steamCountry=[A-Za-z0-9%]+' <<<"$raw" 2>/dev/null | head -n1 | cut -d= -f2 | cut -d% -f1)
+  raw=$(curl_wrapper GET "https://store.steampowered.com" --timeout 4 -D - -o /dev/null 2>/dev/null)
+  cc=$(grep -i -oE 'steamCountry=[A-Za-z0-9%]+' <<<"$raw" 2>/dev/null | head -n1 | cut -d= -f2 | cut -d% -f1)
   if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
     echo "${cc^^}"
   else
@@ -2443,10 +2495,10 @@ lookup_steam() {
 
 lookup_playstation() {
   local raw cc code
-  raw=$(curl_wrapper GET "https://www.playstation.com" --timeout 4 -c - 2>/dev/null)
-  cc=$(grep -oE 'country=[A-Za-z]{2}' <<<"$raw" 2>/dev/null | head -n1 | cut -d= -f2)
+  raw=$(curl_wrapper GET "https://www.playstation.com" --timeout 4 -D - -o /dev/null 2>/dev/null)
+  cc=$(grep -i -oE 'country=[A-Za-z]{2}' <<<"$raw" 2>/dev/null | head -n1 | cut -d= -f2)
   if [[ -z "$cc" ]]; then
-    cc=$(sed -n -E 's|.*playstation\.com/([a-z]{2})-[a-z]{2}/.*|\1|p' <<<"$raw" 2>/dev/null | head -n1)
+    cc=$(grep -i -oE 'location: .*/([a-z]{2})-[a-z]{2}/' <<<"$raw" 2>/dev/null | sed -n -E 's|.*/([a-z]{2})-[a-z]{2}/.*|\1|p' | head -n1)
   fi
   if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
     echo "${cc^^}"
@@ -2482,7 +2534,7 @@ lookup_reddit_guest() {
 lookup_google_search_captcha() {
   local raw
   raw=$(curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 2>/dev/null)
-  if [[ "$raw" == *"/sorry/"* || "$raw" == *"recaptcha"* || "$raw" == *"unusual traffic"* ]]; then
+  if [[ "$raw" == *"/sorry/"* || "$raw" == *"recaptcha"* || "$raw" == *"unusual traffic"* || "$raw" == *"our systems have detected"* ]]; then
     echo "Triggered (Captcha)"
   elif [[ -n "$raw" ]]; then
     echo "Clean (No)"
@@ -2610,7 +2662,7 @@ check_ru_site() {
   elif [[ "$code" =~ ^(403|429|439|498)$ ]]; then
     echo "Blocked (WAF $code)"
     return
-  elif ! [[ "$code" =~ ^(200|301|302|307)$ ]]; then
+  elif ! [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
     echo "Blocked ($code)"
     return
   fi
@@ -2824,11 +2876,17 @@ run_ru_local_services_check() {
     "lookup_kinopoisk" "$s_dir/kinopoisk"
   )
 
-  local i=0
+  local i=0 running=0
+  local max_jobs=8
   while (( i < ${#check_pairs[@]} )); do
     local fn="${check_pairs[i]}"
     local out="${check_pairs[i+1]}"
     "$fn" > "$out" &
+    running=$((running + 1))
+    if (( running >= max_jobs )); then
+      wait -n 2>/dev/null || true
+      running=$((running - 1))
+    fi
     ((i += 2))
   done
   wait
@@ -2858,10 +2916,18 @@ run_western_services_check() {
   local s_dir="$TMP_WORK_DIR/services_western"
   mkdir -p "$s_dir" 2>/dev/null || true
 
+  # Run YouTube lookup first so YOUTUBE_DETECTED_CC and YOUTUBE_AD_FREE are established
+  lookup_youtube > "$s_dir/youtube"
+  local yt_res
+  yt_res=$(read_val "$s_dir/youtube" "No")
+  YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
+  if [[ "$yt_res" == *"Без рекламы"* ]]; then
+    YOUTUBE_AD_FREE=true
+  fi
+
   local check_pairs=(
     "lookup_google" "$s_dir/google"
     "lookup_google_search_captcha" "$s_dir/google_captcha"
-    "lookup_youtube" "$s_dir/youtube"
     "lookup_youtube_cdn" "$s_dir/youtube_cdn"
     "lookup_youtube_premium" "$s_dir/youtube_premium"
     "lookup_youtube_music" "$s_dir/youtube_music"
@@ -2890,7 +2956,7 @@ run_western_services_check() {
   )
 
   local i=0 running=0
-  local max_jobs=16
+  local max_jobs=8
   while (( i < ${#check_pairs[@]} )); do
     local fn="${check_pairs[i]}"
     local out="${check_pairs[i+1]}"
@@ -2903,13 +2969,6 @@ run_western_services_check() {
     ((i += 2))
   done
   wait
-
-  local yt_res
-  yt_res=$(read_val "$s_dir/youtube" "No")
-  YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
-  if [[ "$yt_res" == *"Без рекламы"* ]]; then
-    YOUTUBE_AD_FREE=true
-  fi
 
   ARR_RU_UNBLOCK=(
     "Google"$'\t'"$(read_val "$s_dir/google" "N/A")"
@@ -2990,8 +3049,12 @@ ping_host() {
   elif [[ "$IPV6_ONLY" == "true" ]] || [[ "$IPV4_SUPPORTED" -eq 0 && "$IPV6_SUPPORTED" -eq 1 ]]; then
     ping_flags+=(-6)
   fi
-  local p
-  p=$(LC_ALL=C ping "${ping_flags[@]}" -c 2 -W 2 "$target_ip" 2>/dev/null | tail -n 1 | awk -F '/' '{print $5}')
+  if [[ -n "$INTERFACE_NAME" ]]; then
+    ping_flags+=(-I "$INTERFACE_NAME")
+  fi
+  local raw p
+  raw=$(LC_ALL=C ping "${ping_flags[@]}" -c 2 -W 2 "$target_ip" 2>/dev/null)
+  p=$(sed -n -E 's/.*= *[0-9.]+\/([0-9.]+)\/.*/\1/p' <<<"$raw" | head -n1)
   if [[ -n "$p" && "$p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     printf "%.1f ms" "$p" > "$out_file"
   else
@@ -3112,6 +3175,9 @@ iperf_stream_test() {
       iperf_ver_flag+=(-6)
     elif [[ "$IPV4_ONLY" == "true" ]] || [[ "$IPV6_SUPPORTED" -eq 0 ]]; then
       iperf_ver_flag+=(-4)
+    fi
+    if [[ -n "$INTERFACE_NAME" ]]; then
+      iperf_ver_flag+=("-B" "$INTERFACE_NAME")
     fi
 
     local raw_out="$TMP_WORK_DIR/iperf_raw.log"
@@ -3468,12 +3534,13 @@ run_region_speed_test() {
   fi
 
   local ports=()
-  if [[ "$port_spec" == "5200-5209" ]]; then
-    ports=(5200 5201 5202 5203 5204 5205 5206 5207 5208 5209)
-  elif [[ "$port_spec" == "5201-5209" ]]; then
-    ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209)
-  elif [[ "$port_spec" == "5201-5210" ]]; then
-    ports=(5201 5202 5203 5204 5205 5206 5207 5208 5209 5210)
+  if [[ "$port_spec" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+    local start_p="${BASH_REMATCH[1]}"
+    local end_p="${BASH_REMATCH[2]}"
+    local cur_p
+    for ((cur_p=start_p; cur_p<=end_p; cur_p++)); do
+      ports+=("$cur_p")
+    done
   else
     ports=("$port_spec")
   fi
@@ -3512,11 +3579,6 @@ run_region_speed_test() {
     ((port_attempts++))
     if (( port_attempts > 3 )); then
       break
-    fi
-
-    # Fast TCP pre-check (0.8s) to skip closed or firewalled ports immediately without sending corrupting payload
-    if ! timeout 0.8 bash -c "true > /dev/tcp/$target_ip/$p" 2>/dev/null; then
-      continue
     fi
 
     # 1. Download (Server -> Client, Reverse mode -R)
@@ -3662,12 +3724,18 @@ measure_ru_pings() {
   local srv host
   mkdir -p "$p_dir"
 
+  local running=0 max_jobs=8
   # Ping all unique regional hosts in parallel
   for srv in "${RU_REGIONAL_SERVERS[@]}"; do
     IFS=$'\t' read -r _ _ _ host _ <<<"$srv"
     if [[ ! -f "$p_dir/$host" ]]; then
       touch "$p_dir/$host"
       ping_host "$host" "$p_dir/$host" &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     fi
   done
 
@@ -3677,6 +3745,11 @@ measure_ru_pings() {
     if [[ ! -f "$p_dir/$host" ]]; then
       touch "$p_dir/$host"
       ping_host "$host" "$p_dir/$host" &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     fi
   done
   wait
@@ -4013,21 +4086,40 @@ measure_ookla_speedtest() {
     esac
 
     if [[ -n "$sys_bit" ]]; then
+      local expected_sha=""
+      case "$sys_bit" in
+        x86_64) expected_sha="5690596c54ff9bed63fa3732f818a05dbc2db19ad36ed68f21ca5f64d5cfeeb7" ;;
+        aarch64) expected_sha="3953d231da3783e2bf8904b6dd72767c5c6e533e163d3742fd0437affa431bd3" ;;
+        armhf) expected_sha="e45fcdebbd8a185553535533dd032d6b10bc8c64eee4139b1147b9c09835d08d" ;;
+        i386) expected_sha="9ff7e18dbae7ee0e03c66108445a2fb6ceea6c86f66482e1392f55881b772fe8" ;;
+      esac
+
       local st_dir="$TMP_WORK_DIR/speedtest_bin"
       mkdir -p "$st_dir" 2>/dev/null || true
       local st_tgz="$TMP_WORK_DIR/ookla_st.tgz"
-      local url1="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${sys_bit}.tgz"
-      local url2="https://dl.lamp.sh/files/ookla-speedtest-1.2.0-linux-${sys_bit}.tgz"
+      local st_url="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${sys_bit}.tgz"
 
       progress_status "Инициализация движка Speedtest CLI ($sys_bit)"
-      if curl -fsSL --connect-timeout 5 --max-time 15 "$url1" -o "$st_tgz" 2>/dev/null || \
-         curl -fsSL --connect-timeout 5 --max-time 15 "$url2" -o "$st_tgz" 2>/dev/null; then
-        tar -zxf "$st_tgz" -C "$st_dir" 2>/dev/null || true
-        chmod +x "$st_dir/speedtest" 2>/dev/null || true
-        rm -f "$st_tgz" 2>/dev/null || true
-        if [[ -x "$st_dir/speedtest" ]]; then
-          st_bin="$st_dir/speedtest"
+      if curl -fsSL --connect-timeout 5 --max-time 15 "$st_url" -o "$st_tgz" 2>/dev/null; then
+        local valid_pkg=false
+        if [[ -n "$expected_sha" ]] && is_command_available "sha256sum"; then
+          local actual_sha
+          actual_sha=$(sha256sum "$st_tgz" 2>/dev/null | awk '{print $1}')
+          if [[ "$actual_sha" == "$expected_sha" ]]; then
+            valid_pkg=true
+          fi
+        else
+          valid_pkg=true
         fi
+
+        if [[ "$valid_pkg" == "true" ]]; then
+          tar -zxf "$st_tgz" -C "$st_dir" 2>/dev/null || true
+          chmod +x "$st_dir/speedtest" 2>/dev/null || true
+          if [[ -x "$st_dir/speedtest" ]]; then
+            st_bin="$st_dir/speedtest"
+          fi
+        fi
+        rm -f "$st_tgz" 2>/dev/null || true
       fi
       progress_clear
     fi
@@ -4152,25 +4244,29 @@ measure_ookla_speedtest() {
 # ------------------------------------------------------------------------------
 
 format_table() {
-  awk -F '\t' '{
-    for (i=1; i<=NF; i++) {
-      clean = $i; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
-      if (length(clean) > w[i]) w[i] = length(clean)
-    }
-    rows[NR] = $0
-  }
-  END {
-    for (r=1; r<=NR; r++) {
-      n = split(rows[r], cols, "\t")
-      line = ""
-      for (i=1; i<=n; i++) {
-        clean = cols[i]; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
-        pad = w[i] - length(clean) + 2
-        line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
+  if is_command_available "column"; then
+    column -t -s $'\t'
+  else
+    LC_ALL=C.UTF-8 awk -F '\t' '{
+      for (i=1; i<=NF; i++) {
+        clean = $i; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
+        if (length(clean) > w[i]) w[i] = length(clean)
       }
-      print line
+      rows[NR] = $0
     }
-  }'
+    END {
+      for (r=1; r<=NR; r++) {
+        n = split(rows[r], cols, "\t")
+        line = ""
+        for (i=1; i<=n; i++) {
+          clean = cols[i]; gsub(/\033\[[0-9;]*[a-zA-Z]/, "", clean)
+          pad = w[i] - length(clean) + 2
+          line = line cols[i] sprintf("%*s", (i==n ? 0 : pad), "")
+        }
+        print line
+      }
+    }'
+  fi
 }
 
 # ==============================================================================
@@ -4335,41 +4431,51 @@ readonly ENCRYPTED_DNS_SERVERS=(
 
 probe_single_dns_resolver() {
   local name="$1" ip="$2" out_file="$3"
-  local udp="Blocked" doh="Blocked" dot="Blocked" spoof="Clean"
+  local udp="Blocked" doh="Blocked" dot="Blocked" spoof="N/A"
 
   # 1. UDP DNS (Port 53)
   if is_command_available "dig"; then
     if dig +short +time=2 +tries=1 @"$ip" cloudflare.com A 2>/dev/null | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
       udp="Available"
     fi
-  elif timeout 1.5 bash -c "true >/dev/udp/$ip/53" 2>/dev/null; then
-    udp="Available"
+  elif is_command_available "nslookup"; then
+    if nslookup -timeout=2 cloudflare.com "$ip" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2; exit}' | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      udp="Available"
+    fi
   fi
 
-  # 2. DoH (HTTPS)
-  local doh_endpoint=""
+  # 2. DoH (HTTPS RFC 8484 wireformat)
+  local doh_host="" doh_endpoint=""
   case "$ip" in
-    1.1.1.1|1.0.0.1) doh_endpoint="https://cloudflare-dns.com/dns-query" ;;
-    8.8.8.8|8.8.4.4) doh_endpoint="https://dns.google/dns-query" ;;
-    9.9.9.9|9.9.9.10) doh_endpoint="https://dns.quad9.net/dns-query" ;;
-    94.140.14.14|94.140.15.15) doh_endpoint="https://dns.adguard-dns.com/dns-query" ;;
-    45.90.28.65|45.90.30.65) doh_endpoint="https://dns.nextdns.io" ;;
-    77.88.8.8|77.88.8.1) doh_endpoint="https://common.dot.dns.yandex.net/dns-query" ;;
+    1.1.1.1|1.0.0.1) doh_host="cloudflare-dns.com"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    8.8.8.8|8.8.4.4) doh_host="dns.google"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    9.9.9.9|9.9.9.10) doh_host="dns.quad9.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    94.140.14.14|94.140.15.15) doh_host="dns.adguard-dns.com"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    45.90.28.65|45.90.30.65) doh_host="dns.nextdns.io"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    77.88.8.8|77.88.8.1) doh_host="common.dot.dns.yandex.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
   esac
   if [[ -n "$doh_endpoint" ]]; then
-    if curl -sS -m 2 --connect-timeout 1.5 -H "accept: application/dns-json" "${doh_endpoint}?name=cloudflare.com&type=A" 2>/dev/null | grep -q '"Status":0'; then
+    local dns_b64="AAABAAABAAAAAAAAAmNsb3VkZmxhcmUDY29tAAABAAE" # cloudflare.com IN A
+    local doh_cmd=(curl -sS -m 3 --connect-timeout 2 -o /dev/null \
+      --resolve "${doh_host}:443:${ip}" \
+      -w "%{http_code}:%{content_type}" \
+      -H "accept: application/dns-message")
+    if [[ "$CURL_HAS_HTTP2" == "true" ]]; then
+      doh_cmd+=(--http2)
+    fi
+    local doh_res
+    doh_res=$("${doh_cmd[@]}" "${doh_endpoint}?dns=${dns_b64}" 2>/dev/null)
+    if [[ "$doh_res" == 200:*dns-message* ]]; then
       doh="Available"
     fi
   fi
 
   # 3. DoT (Port 853)
-  if is_command_available "dig" && dig -v 2>&1 | grep -q "+tls"; then
+  if is_command_available "dig" && dig -h 2>&1 | grep -q "+tls"; then
     if dig +short +tls +time=2 +tries=1 @"$ip" cloudflare.com A 2>/dev/null | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
       dot="Available"
     fi
-  elif timeout 2 openssl s_client -connect "${ip}:853" </dev/null >/dev/null 2>&1; then
-    dot="Available"
-  elif timeout 1.5 bash -c "true >/dev/tcp/$ip/853" 2>/dev/null; then
+  elif timeout 2 openssl s_client -connect "${ip}:853" -servername "${doh_host:-cloudflare-dns.com}" </dev/null >/dev/null 2>&1; then
     dot="Available"
   fi
 
@@ -4379,7 +4485,7 @@ probe_single_dns_resolver() {
     if is_command_available "dig"; then
       ans=$(dig +short +time=2 +tries=1 @"$ip" rutracker.org A 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
     elif is_command_available "nslookup"; then
-      ans=$(nslookup -timeout=2 rutracker.org "$ip" 2>/dev/null | awk '/Address:/ {print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -n1)
+      ans=$(nslookup -timeout=2 rutracker.org "$ip" 2>/dev/null | awk '/^Name:/{found=1} found && /^Address:/{print $2; exit}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
     fi
 
     if [[ -z "$ans" ]]; then
@@ -4401,6 +4507,7 @@ run_dns_and_telegram_checks() {
   local tg_dir="$TMP_WORK_DIR/tg_dcs"
   mkdir -p "$dns_dir" "$tg_dir" 2>/dev/null || true
 
+  local running=0 max_jobs=8
   if [[ "$RUN_DNS_AUDIT" == "true" ]]; then
     local i entry name ip
     for i in "${!ENCRYPTED_DNS_SERVERS[@]}"; do
@@ -4408,6 +4515,11 @@ run_dns_and_telegram_checks() {
       name="${entry%%|*}"
       ip="${entry##*|}"
       probe_single_dns_resolver "$name" "$ip" "$dns_dir/$i" &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     done
   fi
 
@@ -4419,6 +4531,11 @@ run_dns_and_telegram_checks() {
       ip="${entry##*|}"
       num="${name#DC}"
       probe_single_telegram_dc "$name" "$ip" "$num" "$tg_dir/$i" &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     done
   fi
 
@@ -4511,15 +4628,36 @@ probe_single_dpi_site() {
     req_path="/report_mapping?di=no"
   fi
 
+  local base_curl=(curl -sS -o /dev/null -A "$USER_AGENT" -k --connect-timeout 2)
+  if [[ "$IPV4_ONLY" == "true" || ( -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ) ]]; then
+    base_curl+=(-4)
+  elif [[ "$IPV6_ONLY" == "true" ]]; then
+    base_curl+=(-6)
+  fi
+  if [[ -n "$PROXY_ADDR" ]]; then
+    base_curl+=(--proxy "socks5h://$PROXY_ADDR")
+  fi
+  if [[ -n "$INTERFACE_NAME" ]]; then
+    base_curl+=(--interface "$INTERFACE_NAME")
+  fi
+
   # HTTP check
-  local http_raw http_code http_res
-  http_code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 3 "http://${domain}${req_path}" 2>/dev/null)
+  local http_code http_exit http_res
+  http_code=$("${base_curl[@]}" --max-time 3 -w "%{http_code}" "http://${domain}${req_path}" 2>/dev/null)
+  http_exit=$?
   http_code="${http_code:-000}"
   [[ "$http_code" =~ ^0+$ ]] && http_code="000"
+
   if [[ "$http_code" =~ ^(301|302|307|308)$ ]]; then
     http_res="Redirected ($http_code)"
   elif [[ "$http_code" == "200" ]]; then
     http_res="Available (200)"
+  elif [[ "$http_exit" -eq 28 ]]; then
+    http_res="Timeout"
+  elif [[ "$http_exit" -eq 6 ]]; then
+    http_res="DNS Error"
+  elif [[ "$http_exit" -eq 7 ]]; then
+    http_res="Conn Refused"
   elif [[ "$http_code" == "000" ]]; then
     http_res="Timeout"
   else
@@ -4527,18 +4665,37 @@ probe_single_dpi_site() {
   fi
 
   # HTTPS check
-  local https_code https_res
-  https_code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 4 -k "https://${domain}${req_path}" 2>/dev/null)
+  local https_timing https_exit https_code https_conn https_tls https_res
+  https_timing=$("${base_curl[@]}" --max-time 4 -w "%{http_code} %{time_connect} %{time_appconnect}" "https://${domain}${req_path}" 2>/dev/null)
+  https_exit=$?
+  read -r https_code https_conn https_tls <<<"$https_timing"
   https_code="${https_code:-000}"
   [[ "$https_code" =~ ^0+$ ]] && https_code="000"
-  if [[ "$https_code" =~ ^(200|301|302|307|308)$ ]]; then
+  https_conn="${https_conn:-0}"
+  https_tls="${https_tls:-0}"
+  [[ ! "$https_conn" =~ ^[0-9]+(\.[0-9]+)?$ ]] && https_conn="0"
+  [[ ! "$https_tls" =~ ^[0-9]+(\.[0-9]+)?$ ]] && https_tls="0"
+
+  if [[ "$https_code" =~ ^(200|206|301|302|307|308)$ ]]; then
     https_res="Available ($https_code)"
-  elif [[ "$https_code" == "000" ]]; then
-    https_res="DPI Drop / Timeout"
-  elif [[ "$https_code" == "403" ]]; then
-    https_res="Blocked (403)"
   elif [[ "$https_code" == "451" ]]; then
     https_res="RKN Blockpage (451)"
+  elif [[ "$https_code" == "403" ]]; then
+    https_res="Blocked (WAF 403)"
+  elif [[ "$https_exit" -eq 35 || "$https_exit" -eq 56 ]]; then
+    https_res="DPI Reset"
+  elif [[ "$https_exit" -eq 28 ]]; then
+    if awk "BEGIN {exit !($https_conn > 0 && $https_tls == 0)}" 2>/dev/null; then
+      https_res="DPI Drop"
+    else
+      https_res="Timeout"
+    fi
+  elif [[ "$https_exit" -eq 6 ]]; then
+    https_res="DNS Error"
+  elif [[ "$https_exit" -eq 7 ]]; then
+    https_res="Conn Refused"
+  elif [[ "$https_code" == "000" ]]; then
+    https_res="Timeout"
   else
     https_res="Blocked ($https_code)"
   fi
@@ -4548,12 +4705,23 @@ probe_single_dpi_site() {
 
 probe_single_geoblocked_site() {
   local domain="$1" out_file="$2"
+  local base_curl=(curl -sS -o /dev/null -L --max-redirs 5 -r 0-4095 -A "$USER_AGENT" --connect-timeout 2 --max-time 4)
+  if [[ "$IPV4_ONLY" == "true" || ( -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ) ]]; then
+    base_curl+=(-4)
+  elif [[ "$IPV6_ONLY" == "true" ]]; then
+    base_curl+=(-6)
+  fi
+  if [[ -n "$PROXY_ADDR" ]]; then
+    base_curl+=(--proxy "socks5h://$PROXY_ADDR")
+  fi
+  if [[ -n "$INTERFACE_NAME" ]]; then
+    base_curl+=(--interface "$INTERFACE_NAME")
+  fi
   local code
-  code=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 4 "https://${domain}" 2>/dev/null)
+  code=$("${base_curl[@]}" -w "%{http_code}" "https://${domain}" 2>/dev/null)
   code="${code:-000}"
   [[ "$code" =~ ^0+$ ]] && code="000"
-  code="${code:-000}"
-  if [[ "$code" =~ ^(200|301|302|307|308)$ ]]; then
+  if [[ "$code" =~ ^(200|206|301|302|307|308)$ ]]; then
     echo "Available ($code)" > "$out_file"
   elif [[ "$code" == "403" ]]; then
     echo "Blocked (Geo-403)" > "$out_file"
@@ -4571,11 +4739,17 @@ run_censorcheck_dpi_and_geoblock() {
   local geo_dir="$TMP_WORK_DIR/geoblocked"
   mkdir -p "$dpi_dir" "$geo_dir" 2>/dev/null || true
 
+  local running=0 max_jobs=8
   if [[ "$RUN_DPI_AUDIT" == "true" ]]; then
     local dom i
     for i in "${!DPI_TARGET_DOMAINS[@]}"; do
       dom="${DPI_TARGET_DOMAINS[$i]}"
       probe_single_dpi_site "$dom" "$dpi_dir/$i" &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     done
   fi
 
@@ -4584,6 +4758,11 @@ run_censorcheck_dpi_and_geoblock() {
     for i in "${!GEO_BLOCKED_SITES[@]}"; do
       dom="${GEO_BLOCKED_SITES[$i]}"
       probe_single_geoblocked_site "$dom" "$geo_dir/$i" &
+      running=$((running + 1))
+      if (( running >= max_jobs )); then
+        wait -n 2>/dev/null || true
+        running=$((running - 1))
+      fi
     done
   fi
 
@@ -4657,13 +4836,13 @@ print_censorcheck_dpi_table() {
   local blocked_count=0
   for row in "${ARR_DPI_DOMAINS[@]}"; do
     IFS=$'\t' read -r d ip h s <<<"$row"
-    if [[ "$s" == *"Drop"* || "$s" == *"Block"* || "$s" == *"Timeout"* ]]; then
+    if [[ "$s" == *"DPI Drop"* || "$s" == *"DPI Reset"* || "$s" == *"RKN Blockpage"* ]]; then
       ((blocked_count++))
     fi
   done
 
   bold "4. 🚫 Фильтрация ТСПУ (Censorcheck DPI) и санкционные ресурсы"; printf "\n"
-  printf "  [ Censorcheck DPI: 18 сайтов ] "
+  printf "  [ Censorcheck DPI: %d сайтов ] " "${#ARR_DPI_DOMAINS[@]}"
   if (( blocked_count == 0 )); then
     printf "\033[%sm[0 блоков / %d доступны без DPI-блокировок]\033[0m\n" "$COLOR_SUCCESS" "${#ARR_DPI_DOMAINS[@]}"
   else
@@ -4948,21 +5127,15 @@ print_western_unblock_table() {
   local all_countries=()
   for row in "${ARR_RU_UNBLOCK[@]}"; do
     IFS=$'\t' read -r _ val <<<"$row"
-    local c
-    c=$(grep -oE '\b[A-Z]{2}\b' <<<"$val" 2>/dev/null | head -n1)
-    if [[ -n "$c" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
+    local c=""
+    if [[ "$val" =~ \(([A-Z]{2}) ]]; then
+      c="${BASH_REMATCH[1]}"
+    elif [[ "$val" =~ ^([A-Z]{2})([[:space:]]|$) ]]; then
+      c="${BASH_REMATCH[1]}"
+    fi
+    if [[ -n "$c" && "$c" != "NO" && "$c" != "NA" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
       all_countries+=("$c")
     fi
-  done
-  for row in "${ARR_GEOIP[@]}"; do
-    IFS=$'\t' read -r _ v4 v6 <<<"$row"
-    for item in "$v4" "$v6"; do
-      local c
-      c=$(grep -oE '\b[A-Z]{2}\b' <<<"$item" 2>/dev/null | head -n1)
-      if [[ -n "$c" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
-        all_countries+=("$c")
-      fi
-    done
   done
 
   if (( ${#all_countries[@]} > 0 )); then
@@ -5062,6 +5235,7 @@ build_json() {
     --arg bbr "${NODE_BBR_STATUS:-}" \
     --arg udp "${NODE_UDP_STATUS:-}" \
     --arg port25 "${NODE_PORT25_STATUS:-}" \
+    --arg uplink_status "${NODE_UPLINK_STATUS:-}" \
     --arg uplink_target "${NODE_UPLINK_TARGET:-}" \
     --arg uplink_ping "${NODE_UPLINK_PING_NUM:-null}" \
     --arg uplink_dl "${NODE_UPLINK_DL:-null}" \
@@ -5149,6 +5323,7 @@ build_json() {
         udp: $udp,
         port25: $port25,
         local_uplink: {
+          status: (if $uplink_status != "" then $uplink_status else "success" end),
           target: (if $uplink_target != "" then $uplink_target else null end),
           latency_ms: (if $uplink_ping != "" and $uplink_ping != "null" and $uplink_ping != "N/A" then ($uplink_ping | try tonumber catch null) else null end),
           download_mbps: (if $uplink_dl != "" and $uplink_dl != "null" then ($uplink_dl | try tonumber catch null) else null end),
@@ -5165,7 +5340,7 @@ build_json() {
           latency_ms: (if $nearest_global_ping != "" and $nearest_global_ping != "null" then ($nearest_global_ping | try tonumber catch null) else null end)
         } else null end)
       },
-      youtube: { ad_free: ($yt_ad_free == "true"), country: $yt_cc },
+      youtube: { ad_free: ($yt_ad_free == "true"), country: (if ($yt_cc != "" and ($yt_cc | test("^[A-Z]{2}$"))) then $yt_cc else null end) },
       geoip_consensus: (
         [$geoip_raw | split("\n")[] | select(length > 0) | split("\t")]
         | map(select(.[0] != null and .[0] != "") | {key: .[0], value: {ipv4: (.[1] // "N/A"), ipv6: (.[2] // "N/A")}})
@@ -5415,6 +5590,7 @@ parse_arguments() {
           error_exit "Для опции $1 требуется аргумент (cloudflare|quad9|adguard)"
         fi
         CUSTOM_DOH_PROVIDER="$2"
+        USE_DOH=true
         shift 2
         ;;
       --no-dns)
@@ -5535,14 +5711,15 @@ main() {
     print_western_unblock_table
   fi
 
-  # 6. Ookla Speedtest (Node Uplink)
-  measure_ookla_speedtest
-
-  # 7. Multi-Region Pings & Speedtest (Russian Federation)
-  progress_status "Замер задержки RTT (регионы РФ)"
+  # Pre-measure regional & global RTT before speedtest & location assessment
+  progress_status "Замер сетевых задержек RTT (регионы РФ и глобальные узлы)"
   measure_ru_pings
   progress_clear
 
+  # 6. Ookla Speedtest (Node Uplink)
+  measure_ookla_speedtest
+
+  # 7. Multi-Region Connectivity & iPerf3 Speedtest (Russian Federation)
   measure_ru_iperf
 
   if [[ "$JSON_OUTPUT" == "true" ]]; then
