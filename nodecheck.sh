@@ -258,7 +258,7 @@ format_value() {
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
       ;;
-    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
+    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*|*"Пропущено"*)
       color "$COLOR_WARN" "$val"
       ;;
     "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*|*"Available"*)
@@ -267,14 +267,14 @@ format_value() {
     *"[Без рекламы"*|*"Без рекламы"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
-    *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Conn Refused"*|*"DNS Error"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
+    *"Unavailable"*|*"недоступен"*|*"не удался"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Conn Refused"*|*"DNS Error"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
       color "$COLOR_DANGER" "$val"
       ;;
     *"ms")
       local num_ms="${val%%.*}"
       num_ms="${num_ms%%ms*}"
       num_ms="${num_ms//[^0-9]/}"
-      num_ms="${num_ms:-999}"
+      num_ms=$((10#${num_ms:-999}))
       if (( num_ms < 60 )); then
         color "$COLOR_SUCCESS" "$val"
       elif (( num_ms < 100 )); then
@@ -313,7 +313,10 @@ render_speed_bar() {
     local m_val="${num%%[Mm]*}"
     m_val="${m_val%%.*}"
     m_val="${m_val//[^0-9]/}"
-    [[ -n "$m_val" ]] && int_num="$m_val"
+    [[ -n "$m_val" ]] && int_num=$((10#$m_val))
+    if (( int_num == 0 )) && awk -v n="${num%%[Mm]*}" 'BEGIN { exit !(n + 0 > 0) }' 2>/dev/null; then
+      int_num=1
+    fi
   fi
   [[ ! "$int_num" =~ ^[0-9]+$ ]] && return
 
@@ -367,7 +370,7 @@ compact_mbps() {
         printf "%dG" "$g_round"
       else
         local g_val
-        g_val=$(awk "BEGIN { printf \"%.1f\", $num / 1000 }")
+        g_val=$(awk -v n="$num" 'BEGIN { printf "%.1f", n / 1000 }')
         printf "%sG" "$g_val"
       fi
     elif (( int_part >= 100 )) || (( max_len > 0 )); then
@@ -475,9 +478,6 @@ enable_raw_terminal() {
 }
 
 cleanup() {
-  # Always restore terminal mode unconditionally FIRST, even in subshells or on signal interruption
-  restore_terminal
-
   if [[ -n "${MAIN_PID:-}" && "$MAIN_PID" -ne "$BASHPID" ]]; then
     return 0
   fi
@@ -485,8 +485,10 @@ cleanup() {
     return 0
   fi
 
+  restore_terminal
   trap - EXIT INT TERM HUP QUIT
   progress_clear
+  pkill -TERM -P "$$" 2>/dev/null || true
   local pids
   pids=$(jobs -p 2>/dev/null)
   if [[ -n "$pids" ]]; then
@@ -702,7 +704,7 @@ get_vpn_node_info() {
     info_raw=$(curl_wrapper GET "https://ipinfo.io/json" "${ip_ver_arg[@]}" --timeout 4 2>/dev/null)
   fi
 
-  if [[ -n "$info_raw" ]] && jq -e . >/dev/null 2>&1 <<<"$info_raw"; then
+  if [[ -n "$info_raw" ]] && jq -e '.country // empty | length > 0' >/dev/null 2>&1 <<<"$info_raw"; then
     [[ -n "$EXTERNAL_IPV4" ]] && printf "%s" "$info_raw" > "$q_dir/ipinfo_v4.json"
     NODE_ASN=$(jq -r '.org // ""' <<<"$info_raw" | grep -oE "AS[0-9]+" || echo "AS0")
     NODE_ORG=$(jq -r '.org // ""' <<<"$info_raw" | sed -E 's/^AS[0-9]+ //')
@@ -767,10 +769,10 @@ get_vpn_node_info() {
     curl_wrapper GET "http://ip-api.com/json/${primary_ip}?fields=status,country,countryCode,city,as,org,mobile,proxy,hosting" "${ip_ver_arg[@]}" --timeout 4 > "$ipapi_file" 2>/dev/null &
     curl_wrapper GET "https://api.ipquery.io/${primary_ip}" "${ip_ver_arg[@]}" --timeout 4 > "$ipq_file" 2>/dev/null &
     curl_wrapper GET "https://ipinfo.check.place/${primary_ip}?lang=en" "${ip_ver_arg[@]}" -A "curl/8.5.0" --timeout 4 > "$checkplace_file" 2>/dev/null &
-    curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 > "$captcha_file" 2>/dev/null &
+    curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 -w "\nHTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" > "$captcha_file" 2>/dev/null &
     if [[ -n "$EXTERNAL_IPV4" ]]; then
-      curl_wrapper GET "https://antifilter.download/list/ip.lst" --timeout 4 > "$rkn_ip_file" 2>/dev/null &
-      curl_wrapper GET "https://antifilter.network/download/ipsum.lst" --timeout 4 > "$rkn_sum_file" 2>/dev/null &
+      ( curl_wrapper GET "https://antifilter.download/list/ip.lst" -f --timeout 10 > "${rkn_ip_file}.part" 2>/dev/null && mv -f "${rkn_ip_file}.part" "$rkn_ip_file" || rm -f "${rkn_ip_file}.part" ) &
+      ( curl_wrapper GET "https://antifilter.network/download/ipsum.lst" -f --timeout 10 > "${rkn_sum_file}.part" 2>/dev/null && mv -f "${rkn_sum_file}.part" "$rkn_sum_file" || rm -f "${rkn_sum_file}.part" ) &
     fi
     wait
   fi
@@ -850,7 +852,9 @@ get_vpn_node_info() {
     NODE_TYPE="Mobile Cellular / ISP"
   elif [[ -n "$abuse_type" && "$abuse_type" =~ [Ff]ixed|[Rr]esidential|[Cc]onsumer|[Cc]able ]]; then
     NODE_TYPE="Residential / ISP"
-  elif [[ -s "$ipq_file" || -s "$ipapi_file" || -s "$scam_file" ]]; then
+  elif { [[ -s "$ipapi_file" ]] && jq -e '.status == "success"' >/dev/null 2>&1 < "$ipapi_file"; } || \
+       { [[ -s "$ipq_file" ]] && jq -e '.ip // empty | length > 0' >/dev/null 2>&1 < "$ipq_file"; } || \
+       { [[ -s "$scam_file" ]] && jq -e '.scamalytics.scamalytics_score != null' >/dev/null 2>&1 < "$scam_file"; }; then
     NODE_TYPE="Residential / ISP"
   else
     NODE_TYPE="Data Center / Hosting"
@@ -906,12 +910,14 @@ get_vpn_node_info() {
   fi
 
   # Google Captcha Test result
-  local g_search=""
+  local g_search="" g_code="" g_url=""
   [[ -s "$captcha_file" ]] && g_search=$(<"$captcha_file")
-  if [[ -z "$g_search" ]]; then
+  g_code=$(extract_http_status "$g_search")
+  g_url=$(tail -n 3 <<<"$g_search" | grep -oE 'EFFECTIVE_URL:[^\r\n]+' | tail -n 1 | cut -d: -f2-)
+  if [[ -z "$g_search" || "$g_code" == "000" ]]; then
     NODE_CAPTCHA_STATUS="N/A (Timeout)"
     NODE_CAPTCHA_COLOR="$COLOR_NULL"
-  elif [[ "$g_search" == *"/sorry/"* || "$g_search" == *"recaptcha"* || "$g_search" == *"unusual traffic"* || "$g_search" == *"our systems have detected"* ]]; then
+  elif [[ "$g_code" == "429" || "$g_url" == *"/sorry/"* || "$g_search" == *"/sorry/"* || "$g_search" == *"recaptcha"* || "$g_search" == *"unusual traffic"* || "$g_search" == *"our systems have detected"* ]]; then
     NODE_CAPTCHA_STATUS="Triggered (Captcha)"
     NODE_CAPTCHA_COLOR="$COLOR_DANGER"
   else
@@ -1469,18 +1475,22 @@ query_single_geoip() {
     "IPinfo.io")
       if [[ "$ip_ver" == "4" && -s "$q_dir/ipinfo_v4.json" ]]; then
         raw=$(<"$q_dir/ipinfo_v4.json")
-      else
-        raw=$(curl_wrapper GET "https://ipinfo.io/${ip_val}/json" --timeout 5 2>/dev/null)
+        cc=$(jq -r '.country // empty' <<<"$raw" 2>/dev/null)
       fi
-      cc=$(jq -r '.country // empty' <<<"$raw" 2>/dev/null)
+      if [[ -z "$cc" ]]; then
+        raw=$(curl_wrapper GET "https://ipinfo.io/${ip_val}/json" --timeout 5 2>/dev/null)
+        cc=$(jq -r '.country // empty' <<<"$raw" 2>/dev/null)
+      fi
       ;;
     "IP-API.com")
       if [[ "$ip_ver" == "4" && -s "$q_dir/ipapi.json" ]]; then
         raw=$(<"$q_dir/ipapi.json")
-      else
-        raw=$(curl_wrapper GET "http://ip-api.com/json/${ip_val}" --timeout 5 2>/dev/null)
+        cc=$(jq -r '.countryCode // empty' <<<"$raw" 2>/dev/null)
       fi
-      cc=$(jq -r '.countryCode // empty' <<<"$raw" 2>/dev/null)
+      if [[ -z "$cc" ]]; then
+        raw=$(curl_wrapper GET "http://ip-api.com/json/${ip_val}" --timeout 5 2>/dev/null)
+        cc=$(jq -r '.countryCode // empty' <<<"$raw" 2>/dev/null)
+      fi
       ;;
     "Cloudflare")
       raw=$(curl_wrapper GET "https://cloudflare.com/cdn-cgi/trace" --ip-version "$ip_ver" --timeout 5 2>/dev/null)
@@ -1532,10 +1542,12 @@ query_single_geoip() {
     "ipquery.io")
       if [[ "$ip_ver" == "4" && -s "$q_dir/ipq.json" ]]; then
         raw=$(<"$q_dir/ipq.json")
-      else
-        raw=$(curl_wrapper GET "https://api.ipquery.io/${ip_val}" --timeout 5 2>/dev/null)
+        cc=$(jq -r '.location.country_code // empty' <<<"$raw" 2>/dev/null)
       fi
-      cc=$(jq -r '.location.country_code // empty' <<<"$raw" 2>/dev/null)
+      if [[ -z "$cc" ]]; then
+        raw=$(curl_wrapper GET "https://api.ipquery.io/${ip_val}" --timeout 5 2>/dev/null)
+        cc=$(jq -r '.location.country_code // empty' <<<"$raw" 2>/dev/null)
+      fi
       ;;
     "IPAPI.is")
       raw=$(curl_wrapper GET "https://api.ipapi.is/?q=${ip_val}" --timeout 5 2>/dev/null)
@@ -1650,7 +1662,7 @@ apply_geoip_consensus_to_header() {
 
   # If strong consensus/plurality exists (at least 4 databases and >= 35% of total votes)
   if [[ -n "$top_code" && $total -gt 0 ]] && (( top_count >= 4 && (top_count * 100 / total) >= 35 )); then
-    if [[ "$NODE_COUNTRY_CODE" != "$top_code" || -z "$NODE_CITY" || "$NODE_CITY" == "N/A" ]]; then
+    if [[ "$NODE_COUNTRY_CODE" != "$top_code" || -z "$NODE_CITY" || "$NODE_CITY" == "N/A" || "$NODE_CITY" == "Unknown City" ]]; then
       local prev_country="$NODE_COUNTRY_CODE"
       NODE_COUNTRY_CODE="$top_code"
 
@@ -1707,7 +1719,7 @@ apply_geoip_consensus_to_header() {
 
 format_unblock_status() {
   local code="$1"
-  if [[ "$code" =~ ^(200|206|301|302|307|308)$ ]]; then
+  if [[ "$code" =~ ^(200|206|301|302|307|308|416)$ ]]; then
     echo "Yes"
   elif [[ "$code" == "000" ]]; then
     echo "No (DPI Drop / Timeout)"
@@ -1815,7 +1827,7 @@ lookup_gemini() {
   if [[ "$code" != "200" || -z "$resp" ]]; then
     local direct_code
     direct_code=$(curl_http_code "https://gemini.google.com")
-    if [[ "$direct_code" =~ ^(200|301|302)$ ]]; then
+    if [[ "$direct_code" =~ ^(200|206|301|302)$ ]]; then
       echo "Yes ($g_cc)"
     else
       format_unblock_status "$direct_code"
@@ -1825,6 +1837,8 @@ lookup_gemini() {
 
   local country_name="${COUNTRY_NAMES[$g_cc]:-}"
   case "$g_cc" in
+    CZ) country_name="Czechia" ;;
+    VA) country_name="Vatican City" ;;
     TR) country_name="Türkiye" ;;
     CY) country_name="Republic of Cyprus" ;;
     BS) country_name="The Bahamas" ;;
@@ -1922,9 +1936,6 @@ lookup_youtube_cdn() {
   local node_id iata
   node_id=$(awk '{print $3}' <<<"$resp")
   iata=$(parse_youtube_cdn_iata "$node_id")
-  if [[ -z "$iata" ]]; then
-    iata=$(sed -n -E 's/.*=> *(tz)?([a-zA-Z]{3}).*/\2/p' <<<"$resp" | head -n 1 | tr '[:lower:]' '[:upper:]')
-  fi
   if [[ -n "$iata" ]]; then echo "Yes ($iata)"; else echo "Yes"; fi
 }
 
@@ -2049,7 +2060,7 @@ lookup_apple() {
   if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
     echo "${cc^^}"
   elif [[ -n "$cc" ]]; then
-    echo "Yes"
+    echo "No (Error)"
   else
     echo "No (Timeout)"
   fi
@@ -2307,10 +2318,10 @@ lookup_ozon() {
 
   if [[ "$code" == "000" ]]; then
     echo "Blocked (Timeout / Geo-Drop)"
-  elif [[ "$code" == "200" ]]; then
-    echo "Yes"
   elif [[ "$code" == "403" ]] || LC_ALL=C.UTF-8 grep -qi -E "blockURL|доступ ограничен|за пределами рф|выключите vpn" <<<"$body"; then
     echo "Blocked (Bad IP / Anti-VPN)"
+  elif [[ "$code" == "200" ]]; then
+    echo "Yes"
   else
     echo "Blocked ($code)"
   fi
@@ -2682,7 +2693,7 @@ iperf_stream_test() {
           while IFS= read -r line; do
             [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]] && has_stream_error=true
             [[ "$line" == *"busy running a test"* ]] && has_server_busy=true
-            [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]] && has_conn_error=true
+            [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* || "$line" == *"No route to host"* || "$line" == *"Network is unreachable"* || "$line" == *"the server has terminated"* || "$line" == *"Operation timed out"* || "$line" == *"timed out"* || "$line" == *"Connection reset"* ]] && has_conn_error=true
 
             if (( active_streams > 1 )); then
               [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
@@ -2956,6 +2967,9 @@ run_region_speed_test() {
     if [[ "$IPERF_LAST_STATUS" -eq 0 ]]; then
       best_ul="$IPERF_LAST_STR"
       best_ul_num="$IPERF_LAST_NUM"
+    elif [[ "$IPERF_SERVER_BUSY" == "true" ]]; then
+      best_ul="Busy"
+      best_ul_num="null"
     else
       best_ul="Blocked"
       best_ul_num="null"
@@ -3265,20 +3279,19 @@ assess_node_location() {
 
   NODE_ESTIMATED_COUNTRY="${est_cc:-XX}"
   NODE_ESTIMATED_CITY="${est_city:-Unknown}"
-  NODE_ESTIMATED_CONFIDENCE="$est_conf"
   NODE_ESTIMATED_REASON="$est_reason"
 
   if [[ -n "$NODE_NEAREST_GLOBAL_CITY" ]]; then
-    printf "  • Ближайший зарубежный ориентир: \033[%sm%s (%s) — %s\033[0m\n" \
-      "$COLOR_INFO" "$NODE_NEAREST_GLOBAL_CITY" "$NODE_NEAREST_GLOBAL_CC" "$NODE_NEAREST_GLOBAL_PING"
+    printf "  • Ближайший зарубежный ориентир: %s\n" \
+      "$(color "$COLOR_INFO" "$NODE_NEAREST_GLOBAL_CITY ($NODE_NEAREST_GLOBAL_CC) — $NODE_NEAREST_GLOBAL_PING")"
   fi
   local c_label="${COUNTRY_NAMES[$NODE_ESTIMATED_COUNTRY]:-$NODE_ESTIMATED_COUNTRY}"
   local loc_display="$NODE_ESTIMATED_COUNTRY ($c_label)"
   if [[ -n "$NODE_ESTIMATED_CITY" && "$NODE_ESTIMATED_CITY" != "Unknown" && "$NODE_ESTIMATED_CITY" != "Unknown City" ]]; then
     loc_display="${NODE_ESTIMATED_COUNTRY} — ${NODE_ESTIMATED_CITY} (${c_label})"
   fi
-  printf "  • Вероятная реальная локация (по всем фактам): \033[%sm%s\033[0m (%s)\n" \
-    "$verdict_color" "$loc_display" "$NODE_ESTIMATED_REASON"
+  printf "  • Вероятная реальная локация (по всем фактам): %s (%s)\n" \
+    "$(color "$verdict_color" "$loc_display")" "$NODE_ESTIMATED_REASON"
 }
 
 
@@ -3339,12 +3352,9 @@ measure_ookla_speedtest() {
           if [[ "$actual_sha" == "$expected_sha" ]]; then
             valid_pkg=true
           fi
-        else
-          valid_pkg=true
         fi
 
-        if [[ "$valid_pkg" == "true" ]]; then
-          tar -zxf "$st_tgz" -C "$st_dir" 2>/dev/null || true
+        if [[ "$valid_pkg" == "true" ]] && tar -zxf "$st_tgz" -C "$st_dir" 2>/dev/null; then
           chmod +x "$st_dir/speedtest" 2>/dev/null || true
           if [[ -x "$st_dir/speedtest" ]]; then
             st_bin="$st_dir/speedtest"
@@ -3433,6 +3443,12 @@ measure_ookla_speedtest() {
 
     local dl_str="${dl_mbps} Mbps"
     local ul_str="${ul_mbps} Mbps"
+
+    NODE_UPLINK_TARGET="$server_desc"
+    NODE_UPLINK_CITY="$s_location"
+    NODE_UPLINK_COUNTRY="$s_country"
+    NODE_UPLINK_PING="$lat_val"
+    NODE_UPLINK_PING_NUM="$s_latency"
 
     printf "  • Ближайший сервер: %s (автовыбор)\n" "$(bold "$server_desc")"
     printf "  • Задержка (Ping):  %s\n" "$(format_value "$lat_val")"
@@ -3573,7 +3589,7 @@ mtproto_exchange() {
 
 probe_single_telegram_dc() {
   local dc_name="$1" dc_ip="$2" dc_num="$3" out_file="$4"
-  if ! is_command_available "openssl"; then
+  if ! is_command_available "openssl" || ! is_command_available "od" || ! is_command_available "tac" || ! is_command_available "fold"; then
     if timeout 2 bash -c "true >/dev/tcp/$dc_ip/443" 2>/dev/null; then
       echo "Available (TCP)" > "$out_file"
     else
@@ -3588,6 +3604,7 @@ probe_single_telegram_dc() {
   local wpid=$!
   local m_rc=0
   wait "$mpid" 2>/dev/null || m_rc=$?
+  pkill -TERM -P "$wpid" 2>/dev/null || true
   kill "$wpid" 2>/dev/null || true
   wait "$wpid" 2>/dev/null || true
 
@@ -3658,7 +3675,7 @@ probe_single_dns_resolver() {
     fi
     local doh_res
     doh_res=$("${doh_cmd[@]}" "${doh_endpoint}?dns=${dns_b64}" 2>/dev/null)
-    if [[ "$doh_res" == 200:*dns-message* ]]; then
+    if [[ "${doh_res,,}" == 200:*dns-message* ]]; then
       doh="Available"
     fi
   fi
@@ -3696,6 +3713,9 @@ probe_single_dns_resolver() {
 }
 
 run_dns_and_telegram_checks() {
+  if [[ "$IPV4_SUPPORTED" -ne 1 ]]; then
+    return 0
+  fi
   local dns_dir="$TMP_WORK_DIR/dns_checks"
   local tg_dir="$TMP_WORK_DIR/tg_dcs"
   mkdir -p "$dns_dir" "$tg_dir" 2>/dev/null || true
@@ -3720,12 +3740,15 @@ run_dns_and_telegram_checks() {
 
   wait
 
-  local spoofed_count=0
+  local spoofed_count=0 udp_ok_count=0
   for i in "${!ENCRYPTED_DNS_SERVERS[@]}"; do
     if [[ -f "$dns_dir/$i" ]]; then
       local line
       line=$(<"$dns_dir/$i")
       ARR_DNS_RESOLVERS+=( "$line" )
+      if [[ "$line" == *$'\tAvailable\t'* ]]; then
+        ((udp_ok_count++))
+      fi
       if [[ "$line" == *"Spoofed"* ]]; then
         ((spoofed_count++))
       fi
@@ -3734,6 +3757,9 @@ run_dns_and_telegram_checks() {
   if (( spoofed_count > 0 )); then
     DNS_HIJACKING_DETECTED=true
     DNS_HIJACKING_MSG="DNS hijacking detected! ($spoofed_count resolvers returned spoofed IP)"
+  elif (( udp_ok_count == 0 )); then
+    DNS_HIJACKING_DETECTED=true
+    DNS_HIJACKING_MSG="Warning: UDP DNS (port 53) unreachable on all tested resolvers"
   else
     DNS_HIJACKING_DETECTED=false
     DNS_HIJACKING_MSG="Good news, no DNS hijacking detected! (reference: Cloudflare IP Ranges)"
@@ -3793,7 +3819,11 @@ probe_single_dpi_site() {
   local domain="$1" out_file="$2"
   local resolved_ip=""
   if is_command_available "getent"; then
-    resolved_ip=$(getent ahosts "$domain" 2>/dev/null | awk '{print $1; exit}')
+    if [[ -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
+      resolved_ip=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1; exit}')
+    else
+      resolved_ip=$(getent ahosts "$domain" 2>/dev/null | awk '{print $1; exit}')
+    fi
   fi
   resolved_ip="${resolved_ip:-N/A}"
 
@@ -3802,7 +3832,7 @@ probe_single_dpi_site() {
     req_path="/report_mapping?di=no"
   fi
 
-  local base_curl=(curl -sS -o /dev/null -A "$USER_AGENT" -k --connect-timeout 2)
+  local base_curl=(curl -sS -o /dev/null -A "$USER_AGENT" --connect-timeout 2)
   if [[ -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
     base_curl+=(-4)
   fi
@@ -3848,6 +3878,8 @@ probe_single_dpi_site() {
     https_res="RKN Blockpage (451)"
   elif [[ "$https_code" == "403" ]]; then
     https_res="Blocked (WAF 403)"
+  elif [[ "$https_exit" -eq 60 ]]; then
+    https_res="MITM / Cert Error"
   elif [[ "$https_exit" -eq 35 || "$https_exit" -eq 56 ]]; then
     https_res="DPI Reset"
   elif [[ "$https_exit" -eq 28 ]]; then
@@ -3879,7 +3911,7 @@ probe_single_geoblocked_site() {
   code=$("${base_curl[@]}" -w "%{http_code}" "https://${domain}" 2>/dev/null)
   code="${code:-000}"
   [[ "$code" =~ ^0+$ ]] && code="000"
-  if [[ "$code" =~ ^(200|206|301|302|307|308)$ ]]; then
+  if [[ "$code" =~ ^(200|206|301|302|307|308|416)$ ]]; then
     echo "Available ($code)" > "$out_file"
   elif [[ "$code" == "403" ]]; then
     echo "Blocked (Geo-403)" > "$out_file"
