@@ -80,7 +80,6 @@ NODE_CPU_STEAL="0.0%"
 NODE_CPU_STEAL_ALLTIME="0.0"
 NODE_CPU_STEAL_COLOR="1;32"
 
-YOUTUBE_AD_FREE=false
 YOUTUBE_DETECTED_CC=""
 
 CHATGPT_STATSIG_API_KEY="client-zUdXdSTygXJdzoE0sWTkP8GKTVsUMF2IRM7ShVO2JAG"
@@ -258,7 +257,7 @@ format_value() {
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
       ;;
-    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*|*"Пропущено"*)
+    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*|*"Пропущено"*|*"Busy"*)
       color "$COLOR_WARN" "$val"
       ;;
     "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*|*"Available"*)
@@ -267,7 +266,7 @@ format_value() {
     *"[Без рекламы"*|*"Без рекламы"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
-    *"Unavailable"*|*"недоступен"*|*"не удался"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Conn Refused"*|*"DNS Error"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
+    *"Unavailable"*|*"недоступен"*|*"не удался"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"MITM / Cert Error"*|*"Conn Refused"*|*"DNS Error"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
       color "$COLOR_DANGER" "$val"
       ;;
     *"ms")
@@ -412,7 +411,7 @@ format_speed_cell() {
     dl_styled="$dl_disp"
   fi
 
-  if [[ -n "$ul_num" && "$ul_num" != "null" && "$ul_num" != "—" && "$ul_num" != "Blocked" && "$ul_num" != "Skipped" ]]; then
+  if [[ -n "$ul_num" && "$ul_num" != "null" && "$ul_num" != "—" && "$ul_num" != "Blocked" && "$ul_num" != "Skipped" && "$ul_num" != "Busy" ]]; then
     ul_disp=$(compact_mbps "$ul_num" 0)
     if [[ -n "$COLOR_TABLE_VALUE" ]]; then
       ul_styled="$(color "$COLOR_TABLE_VALUE" "$ul_disp")"
@@ -421,6 +420,8 @@ format_speed_cell() {
     fi
   elif [[ "$ul_num" == "Blocked" || "$raw_speed" == *"↑ Blocked"* ]]; then
     ul_styled="$(format_value "Blocked")"
+  elif [[ "$ul_num" == "Busy" || "$raw_speed" == *"↑ Busy"* ]]; then
+    ul_styled="$(format_value "Busy")"
   elif [[ "$ul_num" == "Skipped" || "$raw_speed" == *"↑ Skipped"* ]]; then
     ul_styled="$(format_value "Skipped")"
   elif [[ "$ul_num" == "—" || "$raw_speed" == *"↑ —"* ]]; then
@@ -1837,7 +1838,11 @@ lookup_gemini() {
 
   local country_name="${COUNTRY_NAMES[$g_cc]:-}"
   case "$g_cc" in
-    CZ) country_name="Czechia" ;;
+    BQ) country_name="Caribbean Netherlands" ;;
+    FK) country_name="Falkland Islands (Islas Malvinas)" ;;
+    SH) country_name="Saint Helena, Ascension and Tristan da Cunha" ;;
+    VG) country_name="British Virgin Islands" ;;
+    VI) country_name="U.S. Virgin Islands" ;;
     VA) country_name="Vatican City" ;;
     TR) country_name="Türkiye" ;;
     CY) country_name="Republic of Cyprus" ;;
@@ -2117,19 +2122,21 @@ lookup_reddit_guest() {
 }
 
 lookup_google_search_captcha() {
-  local raw=""
+  local raw="" g_code="" g_url=""
   local cached="$TMP_WORK_DIR/quality_bench/captcha.html"
   if [[ -s "$cached" ]]; then
     raw=$(<"$cached")
   else
-    raw=$(curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 2>/dev/null)
+    raw=$(curl_wrapper GET "https://www.google.com/search?q=test" --timeout 3 -w "\nHTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" 2>/dev/null)
   fi
-  if [[ "$raw" == *"/sorry/"* || "$raw" == *"recaptcha"* || "$raw" == *"unusual traffic"* || "$raw" == *"our systems have detected"* ]]; then
-    echo "Triggered (Captcha)"
-  elif [[ -n "$raw" ]]; then
-    echo "Clean (No)"
-  else
+  g_code=$(extract_http_status "$raw")
+  g_url=$(tail -n 3 <<<"$raw" | grep -oE 'EFFECTIVE_URL:[^\r\n]+' | tail -n 1 | cut -d: -f2-)
+  if [[ -z "$raw" || "$g_code" == "000" ]]; then
     echo "N/A (Timeout)"
+  elif [[ "$g_code" == "429" || "$g_url" == *"/sorry/"* || "$raw" == *"/sorry/"* || "$raw" == *"recaptcha"* || "$raw" == *"unusual traffic"* || "$raw" == *"our systems have detected"* ]]; then
+    echo "Triggered (Captcha)"
+  else
+    echo "Clean (No)"
   fi
 }
 
@@ -2460,14 +2467,11 @@ run_western_services_check() {
   local s_dir="$TMP_WORK_DIR/services_western"
   mkdir -p "$s_dir" 2>/dev/null || true
 
-  # Run YouTube lookup first so YOUTUBE_DETECTED_CC and YOUTUBE_AD_FREE are established
+  # Run YouTube lookup first so YOUTUBE_DETECTED_CC is established
   lookup_youtube > "$s_dir/youtube"
   local yt_res
   yt_res=$(read_val "$s_dir/youtube" "No")
   YOUTUBE_DETECTED_CC=$(awk '{print $1}' <<<"$yt_res")
-  if [[ "$yt_res" == *"Без рекламы"* ]]; then
-    YOUTUBE_AD_FREE=true
-  fi
 
   local check_pairs=(
     "lookup_google" "$s_dir/google"
@@ -2744,7 +2748,7 @@ iperf_stream_test() {
         while IFS= read -r line; do
           [[ "$line" == *"unable to create a new stream"* || "$line" == *"parallel"* ]] && has_stream_error=true
           [[ "$line" == *"busy running a test"* ]] && has_server_busy=true
-          [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* ]] && has_conn_error=true
+          [[ "$line" == *"Connection refused"* || "$line" == *"unable to connect"* || "$line" == *"No route to host"* || "$line" == *"Network is unreachable"* || "$line" == *"the server has terminated"* || "$line" == *"Operation timed out"* || "$line" == *"timed out"* || "$line" == *"Connection reset"* ]] && has_conn_error=true
 
           if (( active_streams > 1 )); then
             [[ "$line" =~ ^[[:space:]]*\[SUM\] ]] || continue
@@ -2793,19 +2797,18 @@ RU_REGIONAL_SERVERS=(
   "Центральный регион"$'\t'"Москва"$'\t'"Hostkey DataLine"$'\t'"spd-rudp.hostkey.ru"$'\t'"5201-5209"
   "Центральный регион"$'\t'"Москва"$'\t'"МТС"$'\t'"mskst.st.mtsws.net"$'\t'"3333"
   "Северо-Западный регион"$'\t'"Санкт-Петербург"$'\t'"ЭР-Телеком"$'\t'"st.spb.ertelecom.ru"$'\t'"5201-5209"
-  "Приволжский регион"$'\t'"Казань"$'\t'"ЭР-Телеком"$'\t'"st.kzn.ertelecom.ru"$'\t'"5201-5209"
-  "Приволжский регион"$'\t'"Казань"$'\t'"МТС"$'\t'"kazst.st.mtsws.net"$'\t'"3333"
+  "Приволжский регион"$'\t'"Пенза"$'\t'"ЭР-Телеком"$'\t'"st.penza.ertelecom.ru"$'\t'"5201-5209"
   "Приволжский регион"$'\t'"Нижний Новгород"$'\t'"ТТК"$'\t'"speed-nn.vtt.net"$'\t'"5201"
-  "Приволжский регион"$'\t'"Самара"$'\t'"ЭР-Телеком"$'\t'"st.samara.ertelecom.ru"$'\t'"5201-5209"
+  "Приволжский регион"$'\t'"Саратов"$'\t'"ТТК"$'\t'"speed.vtt.net"$'\t'"5201"
   "Южный регион"$'\t'"Ростов-на-Дону"$'\t'"ЭР-Телеком"$'\t'"st.rostov.ertelecom.ru"$'\t'"5201-5209"
   "Южный регион"$'\t'"Волгоград"$'\t'"ЭР-Телеком"$'\t'"st.volgograd.ertelecom.ru"$'\t'"5201-5209"
   "Южный регион"$'\t'"Волгоград"$'\t'"ТТК"$'\t'"speed-vgd.vtt.net"$'\t'"5201"
   "Южный регион"$'\t'"Астрахань"$'\t'"Билайн"$'\t'"astrakhan1.speedtest.corbina.net"$'\t'"5201"
+  "Уральский регион"$'\t'"Екатеринбург"$'\t'"ЭР-Телеком"$'\t'"st.ekat.ertelecom.ru"$'\t'"5202-5209"
   "Уральский регион"$'\t'"Тюмень"$'\t'"ЭР-Телеком"$'\t'"st.tmn.ertelecom.ru"$'\t'"5201-5209"
   "Уральский регион"$'\t'"Тюмень"$'\t'"МТС"$'\t'"tumst.st.mtsws.net"$'\t'"3333"
   "Уральский регион"$'\t'"Челябинск"$'\t'"ЭР-Телеком"$'\t'"st.chel.ertelecom.ru"$'\t'"5201-5209"
   "Уральский регион"$'\t'"Пермь"$'\t'"ЭР-Телеком"$'\t'"st.perm.ertelecom.ru"$'\t'"5201-5209"
-  "Уральский регион"$'\t'"Уфа"$'\t'"ЭР-Телеком"$'\t'"st.ufa.ertelecom.ru"$'\t'"5201-5209"
   "Сибирский регион"$'\t'"Новосибирск"$'\t'"ЭР-Телеком"$'\t'"st.nsk.ertelecom.ru"$'\t'"5201-5209"
   "Сибирский регион"$'\t'"Красноярск"$'\t'"ЭР-Телеком"$'\t'"st.krsk.ertelecom.ru"$'\t'"5201-5209"
   "Сибирский регион"$'\t'"Омск"$'\t'"ЭР-Телеком"$'\t'"st.omsk.ertelecom.ru"$'\t'"5201-5209"
@@ -3181,12 +3184,23 @@ assess_node_location() {
   # Resolve Ookla server country code if available
   local ookla_cc="" ookla_tenths=999999
   if [[ -n "$NODE_UPLINK_COUNTRY" ]]; then
-    for c in "${!COUNTRY_NAMES[@]}"; do
-      if [[ "${COUNTRY_NAMES[$c],,}" == "${NODE_UPLINK_COUNTRY,,}" ]]; then
-        ookla_cc="$c"
-        break
-      fi
-    done
+    case "${NODE_UPLINK_COUNTRY,,}" in
+      russia) ookla_cc="RU" ;;
+      czechia|"czech republic") ookla_cc="CZ" ;;
+      "united states"|"usa") ookla_cc="US" ;;
+      "united kingdom"|"uk") ookla_cc="GB" ;;
+      "south korea") ookla_cc="KR" ;;
+      turkey|türkiye) ookla_cc="TR" ;;
+      vietnam) ookla_cc="VN" ;;
+    esac
+    if [[ -z "$ookla_cc" ]]; then
+      for c in "${!COUNTRY_NAMES[@]}"; do
+        if [[ "${COUNTRY_NAMES[$c],,}" == "${NODE_UPLINK_COUNTRY,,}" ]]; then
+          ookla_cc="$c"
+          break
+        fi
+      done
+    fi
   fi
   if [[ -n "$NODE_UPLINK_PING_NUM" && "$NODE_UPLINK_PING_NUM" != "null" ]]; then
     ookla_tenths=$(rtt_to_tenths "$NODE_UPLINK_PING_NUM" || echo 999999)
@@ -3317,7 +3331,7 @@ measure_ookla_speedtest() {
   if is_command_available "speedtest"; then
     local check_v
     check_v=$(HOME="$TMP_WORK_DIR" XDG_CONFIG_HOME="$TMP_WORK_DIR" speedtest --version 2>/dev/null || true)
-    if [[ "$check_v" =~ "Speedtest by Ookla"|"Ookla" ]]; then
+    if [[ "$check_v" == *"Ookla"* ]]; then
       st_bin="$(command -v speedtest)"
     fi
   fi
@@ -3835,6 +3849,8 @@ probe_single_dpi_site() {
   local base_curl=(curl -sS -o /dev/null -A "$USER_AGENT" --connect-timeout 2)
   if [[ -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
     base_curl+=(-4)
+  elif [[ -z "$EXTERNAL_IPV4" && -n "$EXTERNAL_IPV6" ]]; then
+    base_curl+=(-6)
   fi
 
   # HTTP check
@@ -3906,6 +3922,8 @@ probe_single_geoblocked_site() {
   local base_curl=(curl -sS -o /dev/null -L --max-redirs 5 -r 0-4095 -A "$USER_AGENT" --connect-timeout 2 --max-time 4)
   if [[ -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
     base_curl+=(-4)
+  elif [[ -z "$EXTERNAL_IPV4" && -n "$EXTERNAL_IPV6" ]]; then
+    base_curl+=(-6)
   fi
   local code
   code=$("${base_curl[@]}" -w "%{http_code}" "https://${domain}" 2>/dev/null)
@@ -4008,7 +4026,7 @@ print_censorcheck_dpi_table() {
   local blocked_count=0
   for row in "${ARR_DPI_DOMAINS[@]}"; do
     IFS=$'\t' read -r d ip h s <<<"$row"
-    if [[ "$s" == *"DPI Drop"* || "$s" == *"DPI Reset"* || "$s" == *"RKN Blockpage"* ]]; then
+    if [[ "$s" == *"DPI Drop"* || "$s" == *"DPI Reset"* || "$s" == *"RKN Blockpage"* || "$s" == *"MITM / Cert Error"* ]]; then
       ((blocked_count++))
     fi
   done

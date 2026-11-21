@@ -3,7 +3,7 @@
 Скрипт аудита VPS/VDS и выделенных серверов под аудиторию РФ: железо, сетевой стек, репутация IP, геолокация, блокировки и скорость.
 
 [![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu-24.04%20LTS-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
-[![Bash](https://img.shields.io/badge/Bash-4.0%2B-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![Bash](https://img.shields.io/badge/Bash-4.3%2B-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Zero Traces](https://img.shields.io/badge/Storage-Zero%20Traces%20(Safe)-brightgreen)](#-без-следов-на-диске)
 
@@ -33,7 +33,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 2. **Диск:**
    * Реальный тип накопителя (NVMe SSD, SSD, Virtual Disk, HDD, Container OverlayFS, RAM Disk) через `lsblk PKNAME` и `rotational`.
-   * Последовательную запись через `dd` с `conv=fdatasync` (256 МБ, либо 512 МБ при RAM ≥ 2 ГБ, лимит 10с). При таймауте считает скорость по фактически записанным байтам, пропускает `tmpfs`/`ramfs` и не запускается, если свободно меньше 2 ГБ или диск заполнен более чем на 90%.
+   * Последовательную запись через `dd` с `conv=fdatasync` (256 МБ, лимит 10с). При таймауте считает скорость по фактически записанным байтам, пропускает `tmpfs`/`ramfs` и не запускается, если свободно меньше 512 МБ или диск заполнен более чем на 90%.
 
 3. **Сетевой стек и BBR:**
    * Статус TCP BBR и наличие модуля ядра `tcp_bbr.ko` (`Inactive (Available)`).
@@ -76,7 +76,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 12. **Скорость и связность:**
     * Зарубежные ноды: Speedtest by Ookla CLI (до 10 Gbps).
-    * Ноды в РФ и связность с Россией: дуплексный iPerf3 и пинг по 7 макро-регионам (21 узел в Москве, СПб, Казани, Нижнем Новгороде, Самаре, Ростове-на-Дону, Волгограде, Астрахани, Екатеринбурге/Урале, Новосибирске и Иркутске/Якутске).
+    * Ноды в РФ и связность с Россией: дуплексный iPerf3 и пинг по 7 макро-регионам (20 узлов в Москве, СПб, Пензе, Нижнем Новгороде, Саратове, Ростове-на-Дону, Волгограде, Астрахани, Екатеринбурге, Тюмени, Челябинске, Перми, Новосибирске, Красноярске, Омске, Иркутске и Якутске).
 
 ---
 
@@ -319,7 +319,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 ## Без следов на диске
 
-* Временные файлы хранятся в `/tmp/nodecheck.$PID.*` с правами `700`.
+* Временные файлы хранятся в `/tmp/nodecheck.XXXXXX` с правами `700`.
 * Для Speedtest CLI задаётся `XDG_CONFIG_HOME="$TMP_WORK_DIR"`, чтобы он не создавал `~/.config/ookla`.
 * Обработчик `trap cleanup` удаляет `/tmp/nodecheck.*` и тестовый файл `dd` при обычном выходе, ошибке или `Ctrl+C`.
 * Скрипт не меняет системные и сетевые настройки и читает `/etc/os-release` без `source`.
