@@ -22,21 +22,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/node
 bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh)
 ```
 
-### Экспресс-режимы:
-* **Без iPerf3 по регионам РФ** (только пинг, аппаратный тест, репутация, сервисы и Ookla Speedtest, ~10–12 секунд):
-  ```bash
-  bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) --no-iperf
-  ```
-* **Чистый JSON** (для Telegram-ботов, мониторинга и автоматизации):
-  ```bash
-  bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) -j
-  ```
-* **Только IPv4 / IPv6:**
-  ```bash
-  bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) -4
-  bash <(curl -fsSL https://raw.githubusercontent.com/justik13/nodecheck/main/nodecheck.sh) -6
-  ```
-
 ---
 
 ## 🔍 Ключевые возможности
@@ -48,7 +33,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 2. **Безопасный бенчмарк и классификатор диска:**
    * Определение реального типа накопителя (**NVMe SSD, SSD, Virtual Disk, HDD, Container OverlayFS, RAM Disk**) через `lsblk PKNAME` и `rotational`.
-   * Адаптивный бенчмарк последовательной записи (стандарт bench.sh: 1 ГБ с `conv=fdatasync`, потолок 10с) с вычислением реальной скорости по фактически записанным байтам при таймауте на медленных дисках, защитой от записи в `tmpfs`/`ramfs`, контролем кода завершения `dd` и проверкой наличия свободного места (не менее 2 ГБ и не более 90% заполнения).
+   * Адаптивный бенчмарк последовательной записи (256 МБ с `conv=fdatasync`, 512 МБ при RAM ≥ 2 ГБ, потолок 10с) с вычислением реальной скорости по фактически записанным байтам при таймауте на медленных дисках, защитой от записи в `tmpfs`/`ramfs`, контролем кода завершения `dd` и проверкой наличия свободного места (не менее 2 ГБ и не более 90% заполнения).
 
 3. **Сетевой стек и BBR:**
    * Диагностика TCP BBR: статус активности + проверка наличия скомпилированного модуля ядра `tcp_bbr.ko` (`Inactive (Available)`).
@@ -85,13 +70,13 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
     * **DPI ТСПУ (18 доменов):** раздельный тест HTTP 80 (редиректы) и HTTPS 443 (DPI Drop / TLS сбросы / заглушки РКН 451): YouTube, Discord, Instagram, Facebook, X/Twitter, Rutracker, Amnezia, Outline, Telegram API, Google Play и др.
     * **Санкционные западные сервисы (10 доменов):** проверка ресурсов, закрытых со стороны Запада для IP из РФ (Spotify, Netflix, Patreon, Swagger, Snyk, MongoDB, Autodesk, Graylog, Redis, MS Copilot).
 
-11. **Стриминги, медиа и AI-сервисы (IP Region 21 + Legend %):**
+11. **Стриминги, медиа и AI-сервисы (IP Region 28 + Legend %):**
     * Точное определение страны, которую видят стриминги и нейросети: Claude AI, OpenAI ChatGPT, Google Gemini, YouTube (включая **YouTube Ad-Free**), TikTok, Disney+, Twitch, JetBrains, Ookla, Microsoft/Bing, Deezer, Steam, PlayStation, Reddit, Apple Services.
     * Сводная таблица **Legend %** распределения стран среди сервисов.
 
 12. **Скорость и связность:**
     * **Замер скорости ноды:** нативный движок Speedtest by Ookla CLI для зарубежных нод (выгрузка и загрузка до 10 Gbps).
-    * **Дуплексный iPerf3 по 7 макро-регионам РФ:** пинг и реальная пропускная способность (↓ DL / ↑ UL) до 20 узлов в Москве, СПб, Казани, Ростове-на-Дону, Екатеринбурге, Новосибирске и Иркутске.
+    * **Дуплексный iPerf3 по 7 макро-регионам РФ:** пинг и реальная пропускная способность (↓ DL / ↑ UL) до 21 узла в Москве, СПб, Казани, Нижнем Новгороде, Самаре, Ростове-на-Дону, Волгограде, Астрахани, Екатеринбурге/Урале, Новосибирске и Иркутске/Якутске.
 
 ---
 
@@ -99,7 +84,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 ```text
 +------------------------------------------------------------------------------+
-| NodeCheck (RU Edition) - Node & Network Quality Auditor v4.0.0-ru            |
+| NodeCheck (RU Edition) - Node & Network Quality Auditor v4.1.0-ru            |
 +------------------------------------------------------------------------------+
  IPv4:              185.96.*.*
  IPv6:              2a14:a084:1a77:*:*:*:*:*
@@ -321,35 +306,14 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 ---
 
-## ⚙️ Опции запуска
+## ⚙️ Управление и требования
 
-| Опция | Описание |
-| :--- | :--- |
-| `-h`, `--help` | Показать справку по всем опциям |
-| `-f`, `--full-ip` | Отображать полный IP без маскирования (по умолчанию скрыт: `*.*`) |
-| `-4`, `--ipv4` | Принудительно тестировать только IPv4 стек |
-| `-6`, `--ipv6` | Принудительно тестировать только IPv6 стек |
-| `-j`, `--json` | Вывод полного отчёта в чистом формате JSON |
-| `-s`, `--streams N` | Количество параллельных потоков iPerf3 (по умолч.: 2 для 1 vCPU, 4 для 2+ vCPU) |
-| `--no-iperf` | Пропустить замер скорости iPerf3 по регионам РФ (только пинг) |
-| `--no-speedtest` | Пропустить замер скорости ноды Ookla Speedtest |
-| `--no-crypto` | Пропустить аппаратный тест шифрования OpenSSL |
-| `--io`, `--disk-bench` | Запустить тест записи диска I/O (включен в TUI, выключен в `-j`) |
-| `--no-io` | Отключить замер скорости диска (I/O) |
-| `--full-iperf` | Расширенный замер iPerf3 (по 10с на каждый регион) |
-| `--iperf-time SEC` | Время замера iPerf3 (по умолч.: 3 секунды) |
-| `--no-dns` | Пропустить проверку DNS-резолверов (UDP/DoH/DoT и Spoofing) |
-| `--no-tg` | Пропустить аудит дата-центров Telegram (MTProto) |
-| `--no-dpi` | Пропустить аудит DPI-блокировок ТСПУ |
-| `--no-geoblock` | Пропустить аудит санкционных зарубежных сервисов |
-| `--no-color` | Отключить форматирование ANSI-цветов |
-| `-p`, `--proxy ADDR` | Тестирование через SOCKS5/SOCKS5h прокси (`хост:порт`) |
-| `-i`, `--interface IF`| Привязка запросов к конкретному сетевому интерфейсу (`eth0`, `ens3`) |
-| `--no-doh` | Использовать системный DNS вместо DNS-over-HTTPS |
-| `--doh PROVIDER` | Выбор DoH-провайдера (`cloudflare`, `quad9`, `adguard`) |
-| `--install-deps` | Автоматически установить недостающие утилиты через `apt` |
-| `-v`, `--verbose` | Подробное логирование запросов в консоль |
-| `-d`, `--debug` | Отладочный режим с записью трассировки в лог-файл |
+Скрипт ориентирован на **Ubuntu 24.04 LTS** и запускается без CLI-флагов:
+
+* **Zero-Mutation проверка зависимостей:** скрипт проверяет наличие `curl`, `jq`, `awk` и при их отсутствии выводит точную команду `apt-get install -y ...`, не модифицируя систему.
+* **Отключение цветов:** стандартная переменная окружения `NO_COLOR=1`.
+* **Интерактивный пропуск iPerf3:** перед и во время замера iPerf3 по регионам РФ можно нажать `Enter`, `Space` или `s` для пропуска этого этапа.
+* **Маскирование IP:** внешние IPv4/IPv6 в шапке отчёта автоматически маскируются (`*.*`).
 
 ---
 
