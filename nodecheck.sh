@@ -313,6 +313,9 @@ format_value() {
     "NO"|"NO ("*)
       color "$COLOR_INFO" "$val"
       ;;
+    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
+      color "$COLOR_WARN" "$val"
+      ;;
     "Yes"*|"YES"*|"OK"*|"Clean"*|"Active"*|"Open"*|"True"|"true"|*"Protected"*|*"Closed"*|*"Включен"*|*"Доступен"*|*"No Captcha"*|*"No captcha"*|*"Available"*)
       color "$COLOR_SUCCESS" "$val"
       ;;
@@ -321,9 +324,6 @@ format_value() {
       ;;
     *"Unavailable"*|"No"*|"BLOCKED"*|*"Blocked"*|*"Block"*|*"Block ("*|*"DPI Drop"*|*"DPI Reset"*|*"Spoofed"*|*"RKN Blockpage"*|*"Conn Refused"*|*"DNS Error"*|*"Закрыт"*|*"Denied"*|*"High Risk"*|*"Leaks"*|*"Timeout"*|*"Captcha"*)
       color "$COLOR_DANGER" "$val"
-      ;;
-    *"Rate limited"*|*"Server error"*|*"Moderate"*|*"Warning"*|*"Inactive"*|*"Skipped"*)
-      color "$COLOR_WARN" "$val"
       ;;
     *"ms")
       local num_ms="${val%%.*}"
@@ -1230,14 +1230,14 @@ get_vpn_node_info() {
 
     if [[ -s "$rkn_ip_file" ]] && grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$rkn_ip_file"; then
       ip_list_ok=true
-      if tr -d '\r' < "$rkn_ip_file" | grep -Fxq "$EXTERNAL_IPV4"; then
+      if grep -Eq "^${EXTERNAL_IPV4//./\\.}"$'\r'"?$" "$rkn_ip_file"; then
         rkn_hit=true
       fi
     fi
 
     if [[ "$rkn_hit" != "true" && -s "$rkn_sum_file" ]] && grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$rkn_sum_file"; then
       ipsum_list_ok=true
-      if tr -d '\r' < "$rkn_sum_file" | awk -v ip="$EXTERNAL_IPV4" '
+      if awk -v ip="$EXTERNAL_IPV4" '
         function ip2int(s, oct, n) {
           n = split(s, oct, ".")
           if (n != 4) return -1
@@ -1245,6 +1245,7 @@ get_vpn_node_info() {
         }
         BEGIN { target = ip2int(ip); hit = 0 }
         {
+          sub(/\r$/, "")
           line = $1
           if (!line || line ~ /^#/) next
           p = index(line, "/")
@@ -1647,6 +1648,7 @@ measure_crypto_bench() {
   bench_out=$(timeout 3 openssl speed -mr -elapsed -seconds 1 -bytes 1024 -evp aes-128-gcm 2>/dev/null) || bench_exit=$?
 
   if [[ $bench_exit -ne 0 || -z "$bench_out" ]]; then
+    bench_exit=0
     bench_out=$(timeout 3 openssl speed -mr -elapsed -seconds 1 -evp aes-128-gcm 2>/dev/null) || bench_exit=$?
   fi
 
@@ -2286,7 +2288,7 @@ lookup_gemini() {
 lookup_youtube() {
   local code resp cc=""
   code=$(curl_http_code "https://www.youtube.com")
-  if [[ ! "$code" =~ ^(200|301|302)$ ]]; then
+  if [[ ! "$code" =~ ^(200|206|301|302)$ ]]; then
     format_unblock_status "$code"
     return
   fi
@@ -2374,7 +2376,7 @@ lookup_youtube_premium() {
 }
 
 lookup_youtube_music() {
-  if [[ "$YOUTUBE_DETECTED_CC" == "RU" || "$YOUTUBE_AD_FREE" == "true" ]]; then
+  if [[ "$YOUTUBE_DETECTED_CC" == "RU" ]]; then
     echo "No"
     return
   fi
@@ -3840,12 +3842,14 @@ measure_ru_iperf() {
 
   if [[ "$JSON_OUTPUT" != "true" ]]; then
     if ! is_command_available "iperf3"; then
-      printf "\n"
-      if [[ -n "$COLOR_NULL" ]]; then
-        printf "  \033[%sm* Для замера пропускной способности iPerf3: apt install -y iperf3\033[0m\n" "$COLOR_NULL"
-      else
-        printf "  * Для замера пропускной способности iPerf3: apt install -y iperf3\n"
+      local iperf_hint="apt install -y iperf3"
+      if is_command_available "dnf"; then iperf_hint="dnf install -y iperf3"
+      elif is_command_available "yum"; then iperf_hint="yum install -y iperf3"
+      elif is_command_available "apk"; then iperf_hint="apk add iperf3"
+      elif is_command_available "pacman"; then iperf_hint="pacman -S iperf3"
       fi
+      printf "\n"
+      printf "  %s\n" "$(color "$COLOR_NULL" "* Для замера пропускной способности iPerf3: $iperf_hint")"
     fi
     printf "\n"
   fi
@@ -4453,7 +4457,8 @@ probe_single_dns_resolver() {
   case "$ip" in
     1.1.1.1|1.0.0.1) doh_host="cloudflare-dns.com"; doh_endpoint="https://${doh_host}/dns-query" ;;
     8.8.8.8|8.8.4.4) doh_host="dns.google"; doh_endpoint="https://${doh_host}/dns-query" ;;
-    9.9.9.9|9.9.9.10) doh_host="dns.quad9.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    9.9.9.9) doh_host="dns.quad9.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
+    9.9.9.10) doh_host="dns10.quad9.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
     94.140.14.14|94.140.15.15) doh_host="dns.adguard-dns.com"; doh_endpoint="https://${doh_host}/dns-query" ;;
     45.90.28.65|45.90.30.65) doh_host="dns.nextdns.io"; doh_endpoint="https://${doh_host}/dns-query" ;;
     77.88.8.8|77.88.8.1) doh_host="common.dot.dns.yandex.net"; doh_endpoint="https://${doh_host}/dns-query" ;;
@@ -4821,9 +4826,9 @@ print_dns_and_telegram_tables() {
     } | format_table
     if [[ -n "$DNS_HIJACKING_MSG" ]]; then
       if [[ "$DNS_HIJACKING_DETECTED" == "true" ]]; then
-        printf "  \033[%sm%s\033[0m\n\n" "$COLOR_DANGER" "$DNS_HIJACKING_MSG"
+        printf "  %s\n\n" "$(color "$COLOR_DANGER" "$DNS_HIJACKING_MSG")"
       else
-        printf "  \033[%sm%s\033[0m\n\n" "$COLOR_SUCCESS" "$DNS_HIJACKING_MSG"
+        printf "  %s\n\n" "$(color "$COLOR_SUCCESS" "$DNS_HIJACKING_MSG")"
       fi
     else
       printf "\n"
@@ -4860,9 +4865,9 @@ print_censorcheck_dpi_table() {
   bold "4. 🚫 Фильтрация ТСПУ (Censorcheck DPI) и санкционные ресурсы"; printf "\n"
   printf "  [ Censorcheck DPI: %d сайтов ] " "${#ARR_DPI_DOMAINS[@]}"
   if (( blocked_count == 0 )); then
-    printf "\033[%sm[0 блоков / %d доступны без DPI-блокировок]\033[0m\n" "$COLOR_SUCCESS" "${#ARR_DPI_DOMAINS[@]}"
+    printf "%s\n" "$(color "$COLOR_SUCCESS" "[0 блоков / ${#ARR_DPI_DOMAINS[@]} доступны без DPI-блокировок]")"
   else
-    printf "\033[%sm[%d блоков из %d ресурсов под фильтрацией ТСПУ]\033[0m\n" "$COLOR_DANGER" "$blocked_count" "${#ARR_DPI_DOMAINS[@]}"
+    printf "%s\n" "$(color "$COLOR_DANGER" "[$blocked_count блоков из ${#ARR_DPI_DOMAINS[@]} ресурсов под фильтрацией ТСПУ]")"
   fi
 
   {
@@ -4891,9 +4896,9 @@ print_geoblocked_table() {
 
   printf "  [ Санкционные зарубежные сервисы ] "
   if (( allowed_count == ${#ARR_GEO_BLOCKED[@]} )); then
-    printf "\033[%sm[%d / %d пускают IP этого сервера]\033[0m\n" "$COLOR_SUCCESS" "$allowed_count" "${#ARR_GEO_BLOCKED[@]}"
+    printf "%s\n" "$(color "$COLOR_SUCCESS" "[$allowed_count / ${#ARR_GEO_BLOCKED[@]} пускают IP этого сервера]")"
   else
-    printf "\033[%sm[%d / %d открываются с этого IP]\033[0m\n" "$COLOR_WARN" "$allowed_count" "${#ARR_GEO_BLOCKED[@]}"
+    printf "%s\n" "$(color "$COLOR_WARN" "[$allowed_count / ${#ARR_GEO_BLOCKED[@]} открываются с этого IP]")"
   fi
 
   {
@@ -5149,7 +5154,7 @@ print_western_unblock_table() {
     elif [[ "$val" =~ ^([A-Z]{2})([[:space:]]|$) ]]; then
       c="${BASH_REMATCH[1]}"
     fi
-    if [[ -n "$c" && "$c" != "NO" && "$c" != "NA" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
+    if [[ -n "$c" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
       all_countries+=("$c")
     fi
   done
