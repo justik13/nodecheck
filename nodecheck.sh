@@ -1510,8 +1510,8 @@ query_single_geoip() {
       cc=$(jq -r '.location.country.code // empty' <<<"$raw" 2>/dev/null)
       ;;
     "IP-API.co")
-      raw=$(curl_wrapper GET "https://ipapi.co/${ip_val}/json/" --timeout 5 2>/dev/null)
-      cc=$(jq -r '.country_code // empty' <<<"$raw" 2>/dev/null)
+      raw=$(curl_wrapper GET "https://ipapi.co/${ip_val}/json" -A "curl/8.5.0" --header "Referer: https://ipapi.co/" --timeout 5 2>/dev/null)
+      cc=$(jq -r '.country_code // .country // empty' <<<"$raw" 2>/dev/null)
       ;;
     "IP2Location.io")
       raw=$(curl_wrapper GET "https://api.ip2location.io/?ip=${ip_val}" --timeout 5 2>/dev/null)
@@ -1796,15 +1796,34 @@ lookup_chatgpt() {
 }
 
 lookup_claude() {
-  local raw code eff_url
-  raw=$(curl_wrapper GET "https://claude.ai" --timeout 4 -o /dev/null -w "HTTP_STATUS:%{http_code}\nEFFECTIVE_URL:%{url_effective}" 2>/dev/null)
-  code=$(extract_http_status "$raw")
-  eff_url=$(extract_effective_url "$raw")
+  local raw cc
+  raw=$(curl_wrapper GET "https://claude.ai/api/bootstrap" \
+    -A "Claude com.anthropic.claude/1.261023.20 (Android 30) Claude/1.261023.20" \
+    --header "Anthropic-Client-Platform: android" \
+    --timeout 4 2>/dev/null)
+  cc=$(jq -r '.statsig.user.country // empty' <<<"$raw" 2>/dev/null)
+  if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
+    cc="${cc^^}"
+    case "$cc" in
+      RU|BY|CN|IR|KP|SY)
+        echo "No ($cc - Region blocked)"
+        ;;
+      *)
+        echo "$cc"
+        ;;
+    esac
+    return
+  fi
 
-  if [[ "$eff_url" == *"app-unavailable-in-region"* || "$eff_url" == *"unavailable"* ]]; then
+  local api_raw api_code
+  api_raw=$(curl_wrapper GET "https://api.anthropic.com/v1/models" --timeout 4 -w "\nHTTP_STATUS:%{http_code}" 2>/dev/null)
+  api_code=$(extract_http_status "$api_raw")
+  if grep -qi "Request not allowed" <<<"$api_raw"; then
     echo "No (Region blocked)"
+  elif [[ "$api_code" == "401" || "$api_code" == "200" ]]; then
+    echo "Yes"
   else
-    format_unblock_status "$code"
+    format_unblock_status "$api_code"
   fi
 }
 
@@ -2296,9 +2315,9 @@ lookup_avito() {
   if [[ "$code" == "000" ]]; then
     echo "Blocked (Timeout / Geo-Drop)"
   elif [[ "$code" == "439" ]] || LC_ALL=C.UTF-8 grep -qi "pow_challenge" <<<"$resp"; then
-    echo "Yes (Browser / PoW)"
+    echo "OK (Browser / PoW)"
   elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
-    echo "Yes"
+    echo "OK"
   elif [[ "$code" == "429" ]]; then
     echo "Challenge (Qrator 429)"
   elif [[ "$code" == "403" ]]; then
@@ -2319,7 +2338,7 @@ lookup_wildberries() {
   if [[ "$code" == "000" ]]; then
     echo "Blocked (Timeout / Geo-Drop)"
   elif [[ "$code" == "200" ]]; then
-    echo "Yes"
+    echo "OK"
   elif [[ "$code" =~ ^(403|498)$ ]]; then
     echo "Challenge / Anti-VPN ($code)"
   else
@@ -2343,7 +2362,7 @@ lookup_ozon() {
   elif [[ "$code" == "403" ]] || [[ "$body" == *"incidentId"* ]]; then
     echo "Challenge (Antibot ${code})"
   elif [[ "$code" == "200" ]]; then
-    echo "Yes"
+    echo "OK"
   else
     echo "Blocked ($code)"
   fi
@@ -2360,7 +2379,7 @@ lookup_kinopoisk() {
   local cc="${NODE_COUNTRY_CODE^^}"
   case "$cc" in
     RU|BY|KZ|AM|KG|UZ)
-      echo "Yes"
+      echo "OK"
       ;;
     *)
       echo "No (DRM Geo-blocked)"
@@ -2379,7 +2398,7 @@ lookup_pochta() {
   elif [[ "$code" == "417" ]] || LC_ALL=C.UTF-8 grep -qi "вы используете vpn" <<<"$body"; then
     echo "Blocked (Anti-VPN 417)"
   elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
-    echo "Yes"
+    echo "OK"
   else
     echo "Blocked ($code)"
   fi
@@ -2395,7 +2414,7 @@ lookup_fssp() {
   elif [[ "$code" =~ ^(503|403)$ ]]; then
     echo "Blocked (Geo-restricted $code)"
   elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
-    echo "Yes"
+    echo "OK"
   else
     echo "Blocked ($code)"
   fi
@@ -2409,7 +2428,7 @@ lookup_consultant() {
   if [[ "$code" == "000" ]]; then
     echo "Blocked (Timeout / Geo-Drop)"
   elif [[ "$code" =~ ^(200|301|302|307)$ ]]; then
-    echo "Yes"
+    echo "OK"
   elif [[ "$code" == "403" ]]; then
     echo "Blocked (403 Forbidden)"
   else
@@ -2858,10 +2877,16 @@ run_region_speed_test() {
 
   local base_port="${port_spec%%-*}"
   if [[ -z "$host" ]] || ! is_command_available "iperf3"; then
-    printf "  %s  %s  %s\n" \
-      "$(pad_str "$label" 37)" \
-      "$(pad_str "$(format_value "$ping_val")" 10)" \
-      "$(format_value "—")"
+    if is_command_available "iperf3"; then
+      printf "  %s  %s  %s\n" \
+        "$(pad_str "$label" 37)" \
+        "$(pad_str "$(format_value "$ping_val")" 10)" \
+        "$(format_value "—")"
+    else
+      printf "  %s  %s\n" \
+        "$(pad_str "$label" 37)" \
+        "$(format_value "$ping_val")"
+    fi
     return
   fi
 
@@ -3187,7 +3212,12 @@ assess_node_location() {
   local -A svc_counts=()
   for row in "${ARR_RU_UNBLOCK[@]}"; do
     IFS=$'\t' read -r _ item <<<"$row"
-    c=$(grep -oE '\b[A-Z]{2}\b' <<<"$item" 2>/dev/null | head -n1 || true)
+    c=""
+    if [[ "$item" =~ \(([A-Z]{2})(\)|[[:space:]]|-) ]]; then
+      c="${BASH_REMATCH[1]}"
+    elif [[ "$item" =~ ^([A-Z]{2})([[:space:]]|$) ]]; then
+      c="${BASH_REMATCH[1]}"
+    fi
     if [[ -n "$c" && -n "${COUNTRY_NAMES[$c]:-}" ]]; then
       svc_counts["$c"]=$(( svc_counts["$c"] + 1 ))
       svc_total=$(( svc_total + 1 ))
@@ -3259,8 +3289,14 @@ assess_node_location() {
   local verdict_color="$COLOR_INFO"
 
   if (( min_tenths < 999999 )); then
-    # Check for clear physical contradiction: local RTT (<= 8 ms) in a different country than GeoIP
-    if [[ -n "$min_cc" && -n "$geoip_cc" && "$min_cc" != "$geoip_cc" && "$geoip_cc" != "XX" ]] && (( min_tenths <= 80 )); then
+    # Check for clear physical contradiction:
+    # <= 1.5 ms is same metro/DC; <= 5.0 ms excludes tight cross-border pairs (e.g. Tallinn/Helsinki)
+    local is_close_pair=false
+    case "${geoip_cc}:${min_cc}" in
+      EE:FI|FI:EE|AT:SK|SK:AT|DK:SE|SE:DK|BE:NL|NL:BE|SG:MY|MY:SG) is_close_pair=true ;;
+    esac
+    if [[ -n "$min_cc" && -n "$geoip_cc" && "$min_cc" != "$geoip_cc" && "$geoip_cc" != "XX" ]] && \
+       { (( min_tenths <= 15 )) || { [[ "$is_close_pair" == "false" ]] && (( min_tenths <= 50 )); }; }; then
       est_cc="$min_cc"
       est_city="$min_city"
       est_conf="high (physical RTT)"
@@ -3705,10 +3741,19 @@ probe_single_dns_resolver() {
     if [[ "$CURL_HAS_HTTP2" == "true" ]]; then
       doh_cmd+=(--http2)
     fi
-    local doh_res
-    doh_res=$("${doh_cmd[@]}" "${doh_endpoint}?dns=${dns_b64}" 2>/dev/null)
-    if [[ "${doh_res,,}" == 200:*dns-message* ]]; then
-      doh="Available"
+    local doh_res="" doh_rc=0 attempt
+    for attempt in 1 2; do
+      doh_rc=0
+      doh_res=$("${doh_cmd[@]}" "${doh_endpoint}?dns=${dns_b64}" 2>/dev/null) || doh_rc=$?
+      if [[ "${doh_res,,}" == 200:*dns-message* ]]; then
+        doh="Available"
+        break
+      fi
+      [[ $attempt -eq 1 && $doh_rc -eq 28 ]] && continue
+      break
+    done
+    if [[ "$doh" != "Available" && $doh_rc -eq 28 ]]; then
+      doh="Timeout"
     fi
   fi
 
@@ -3775,13 +3820,14 @@ run_dns_and_telegram_checks() {
   local spoofed_count=0 udp_ok_count=0
   for i in "${!ENCRYPTED_DNS_SERVERS[@]}"; do
     if [[ -f "$dns_dir/$i" ]]; then
-      local line
+      local line r_udp r_spoof
       line=$(<"$dns_dir/$i")
       ARR_DNS_RESOLVERS+=( "$line" )
-      if [[ "$line" == *$'\tAvailable\t'* ]]; then
+      IFS=$'\t' read -r _ _ r_udp _ _ r_spoof <<<"$line"
+      if [[ "$r_udp" == "Available" ]]; then
         ((udp_ok_count++))
       fi
-      if [[ "$line" == *"Spoofed"* ]]; then
+      if [[ "$r_spoof" == *"Spoofed"* ]]; then
         ((spoofed_count++))
       fi
     fi
@@ -3841,7 +3887,7 @@ readonly GEO_BLOCKED_SITES=(
   "swagger.io"
   "snyk.io"
   "mongodb.com"
-  "autodesk.com"
+  "docker.com"
   "graylog.org"
   "redis.io"
   "copilot.microsoft.com"
@@ -3853,6 +3899,8 @@ probe_single_dpi_site() {
   if is_command_available "getent"; then
     if [[ -n "$EXTERNAL_IPV4" && -z "$EXTERNAL_IPV6" ]]; then
       resolved_ip=$(getent ahostsv4 "$domain" 2>/dev/null | awk '{print $1; exit}')
+    elif [[ -z "$EXTERNAL_IPV4" && -n "$EXTERNAL_IPV6" ]]; then
+      resolved_ip=$(getent ahostsv6 "$domain" 2>/dev/null | awk '{print $1; exit}')
     else
       resolved_ip=$(getent ahosts "$domain" 2>/dev/null | awk '{print $1; exit}')
     fi
@@ -4041,18 +4089,22 @@ print_censorcheck_dpi_table() {
     return 0
   fi
 
-  local blocked_count=0
+  local blocked_count=0 fail_count=0
   for row in "${ARR_DPI_DOMAINS[@]}"; do
     IFS=$'\t' read -r d ip h s <<<"$row"
     if [[ "$s" == *"DPI Drop"* || "$s" == *"DPI Reset"* || "$s" == *"RKN Blockpage"* || "$s" == *"MITM / Cert Error"* ]]; then
       ((blocked_count++))
+    elif [[ "$s" != *"Available"* ]]; then
+      ((fail_count++))
     fi
   done
 
   bold "4. 🚫 Фильтрация ТСПУ (Censorcheck DPI) и санкционные ресурсы"; printf "\n"
   printf "  [ Censorcheck DPI: %d сайтов ] " "${#ARR_DPI_DOMAINS[@]}"
-  if (( blocked_count == 0 )); then
+  if (( blocked_count == 0 && fail_count == 0 )); then
     printf "%s\n" "$(color "$COLOR_SUCCESS" "[0 блоков / ${#ARR_DPI_DOMAINS[@]} доступны без DPI-блокировок]")"
+  elif (( blocked_count == 0 )); then
+    printf "%s\n" "$(color "$COLOR_WARN" "[0 DPI-блоков, но $fail_count из ${#ARR_DPI_DOMAINS[@]} недоступны (Timeout/WAF/Error)]")"
   else
     printf "%s\n" "$(color "$COLOR_DANGER" "[$blocked_count блоков из ${#ARR_DPI_DOMAINS[@]} ресурсов под фильтрацией ТСПУ]")"
   fi

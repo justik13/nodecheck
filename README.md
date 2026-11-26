@@ -68,7 +68,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
 
 10. **Фильтрация ТСПУ (Censorcheck DPI) и санкционные ресурсы:**
     * DPI ТСПУ (18 доменов): раздельный тест HTTP 80 (редиректы) и HTTPS 443 (DPI Drop, TLS-сбросы, заглушка РКН 451) — YouTube, Discord, Instagram, Facebook, X/Twitter, Rutracker, Amnezia, Outline, Telegram API, Google Play и др.
-    * Санкционные западные сервисы (10 доменов): Spotify, Netflix, Patreon, Swagger, Snyk, MongoDB, Autodesk, Graylog, Redis, MS Copilot.
+    * Санкционные западные сервисы (10 доменов): Spotify, Netflix, Patreon, Swagger, Snyk, MongoDB, Docker, Graylog, Redis, MS Copilot.
 
 11. **Стриминги, медиа и AI-сервисы (IP Region 28 + Legend %):**
     * Определение страны для Claude AI, OpenAI ChatGPT, Google Gemini, YouTube (включая YouTube Ad-Free), TikTok, Disney+, Twitch, JetBrains, Ookla, Microsoft/Bing, Deezer, Steam, PlayStation, Reddit, Apple Services.
@@ -218,7 +218,7 @@ bash <(wget -qO- https://raw.githubusercontent.com/justik13/nodecheck/main/nodec
   swagger.io                    Blocked (Geo-403)
   snyk.io                       Blocked (Geo-403)
   mongodb.com                   Available (301)
-  autodesk.com                  Available (301)
+  docker.com                    Blocked (WAF 403)
   graylog.org                   Blocked (Geo-403)
   redis.io                      Blocked (Geo-403)
   copilot.microsoft.com         Blocked (Geo-403)
