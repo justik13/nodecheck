@@ -10,8 +10,27 @@
 # ==============================================================================
 
 set -o pipefail
-export LC_ALL=C.UTF-8
-export LANG=C.UTF-8
+
+ensure_utf8_locale() {
+  local current="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" candidate available=""
+  [[ "$current" == *[Uu][Tt][Ff]* ]] && return 0
+
+  if command -v locale >/dev/null 2>&1; then
+    available=$(locale -a 2>/dev/null || true)
+    for candidate in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+      if printf '%s\n' "$available" | grep -Fxiq "$candidate"; then
+        export LANG="$candidate" LC_ALL="$candidate"
+        return 0
+      fi
+    done
+  fi
+
+  if LC_ALL=C.UTF-8 locale charmap 2>/dev/null | grep -Fqx UTF-8; then
+    export LANG=C.UTF-8 LC_ALL=C.UTF-8
+  fi
+}
+
+ensure_utf8_locale
 
 SCRIPT_VERSION="4.1.0-ru"
 
@@ -42,6 +61,9 @@ NODE_RKN_COLOR="0;90"
 NODE_DNSBL_STATUS="Checking..."
 NODE_DNSBL_COLOR="0;90"
 NODE_BBR_STATUS=""
+NODE_DMI=""
+NODE_LOADAVG=""
+NODE_DISK_MODEL=""
 NODE_PORT25_STATUS=""
 NODE_UDP_STATUS=""
 NODE_UPLINK_TARGET=""
@@ -232,11 +254,17 @@ read_val() {
   fi
 }
 
+vlen() {
+  local c="${1//[$'\x80'-$'\xbf']/}"
+  echo "${#c}"
+}
+
 pad_str() {
   local s="$1" w="$2"
   shopt -s extglob
   local clean="${s//$'\033'\[*([0-9;])[a-zA-Z]/}"
-  local len=${#clean}
+  local len
+  len=$(vlen "$clean")
   local diff=$(( w - len ))
   if (( diff > 0 )); then
     printf "%s%*s" "$s" "$diff" ""
@@ -490,13 +518,13 @@ cleanup() {
   trap - EXIT INT TERM HUP QUIT
   progress_clear
   pkill -TERM -P "$$" 2>/dev/null || true
-  local pids
-  pids=$(jobs -p 2>/dev/null)
-  if [[ -n "$pids" ]]; then
-    kill -TERM $pids 2>/dev/null || true
+  local pids=()
+  mapfile -t pids < <(jobs -pr 2>/dev/null || true)
+  if (( ${#pids[@]} > 0 )); then
+    kill -TERM "${pids[@]}" 2>/dev/null || true
     sleep 0.05 2>/dev/null || true
-    kill -KILL $pids 2>/dev/null || true
-    wait 2>/dev/null || true
+    kill -KILL "${pids[@]}" 2>/dev/null || true
+    wait "${pids[@]}" 2>/dev/null || true
   fi
   if [[ -n "$CURRENT_DISK_TEST_FILE" && -f "$CURRENT_DISK_TEST_FILE" ]]; then
     rm -f "$CURRENT_DISK_TEST_FILE" 2>/dev/null || true
@@ -930,14 +958,28 @@ get_vpn_node_info() {
     NODE_CAPTCHA_COLOR="$COLOR_SUCCESS"
   fi
 
-  # TCP BBR status & module detection
+  # TCP BBR status, qdisc & module detection
+  local qdisc=""
+  qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null | tr -d '[:space:]' || true)
   if sysctl net.ipv4.tcp_congestion_control 2>/dev/null | grep -q "bbr"; then
-    NODE_BBR_STATUS="Active"
+    if [[ -n "$qdisc" ]]; then
+      NODE_BBR_STATUS="Active ($qdisc)"
+    else
+      NODE_BBR_STATUS="Active"
+    fi
   else
     if modinfo tcp_bbr >/dev/null 2>&1 || ls /lib/modules/"$(uname -r 2>/dev/null)"/kernel/net/ipv4/tcp_bbr* >/dev/null 2>&1; then
-      NODE_BBR_STATUS="Inactive (Available)"
+      if [[ -n "$qdisc" ]]; then
+        NODE_BBR_STATUS="Inactive (Available, $qdisc)"
+      else
+        NODE_BBR_STATUS="Inactive (Available)"
+      fi
     else
-      NODE_BBR_STATUS="Inactive"
+      if [[ -n "$qdisc" ]]; then
+        NODE_BBR_STATUS="Inactive ($qdisc)"
+      else
+        NODE_BBR_STATUS="Inactive"
+      fi
     fi
   fi
 
@@ -1158,6 +1200,14 @@ get_disk_type() {
   fi
 
   if [[ "$parent_dev" =~ ^nvme ]]; then
+    if is_command_available "lsblk"; then
+      local disk_row disk_tran disk_vendor disk_model
+      disk_row=$(lsblk -dnP -o NAME,TYPE,TRAN,VENDOR,MODEL "/dev/$parent_dev" 2>/dev/null | head -n 1 || true)
+      disk_tran=$(printf '%s' "$disk_row" | sed -n 's/.*TRAN="\([^"]*\)".*/\1/p')
+      disk_vendor=$(printf '%s' "$disk_row" | sed -n 's/.*VENDOR="\([^"]*\)".*/\1/p')
+      disk_model=$(printf '%s' "$disk_row" | sed -n 's/.*MODEL="\([^"]*\)".*/\1/p')
+      NODE_DISK_MODEL=$(printf '%s %s' "$disk_vendor" "$disk_model" | sed -E 's/[[:space:]]+/ /g;s/^ //;s/ $//')
+    fi
     echo "NVMe SSD"
     return 0
   fi
@@ -1165,6 +1215,17 @@ get_disk_type() {
   local is_rota=""
   if is_command_available "lsblk"; then
     is_rota=$(lsblk -dno ROTA "/dev/$parent_dev" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+    local disk_row disk_tran disk_vendor disk_model
+    disk_row=$(lsblk -dnP -o NAME,TYPE,TRAN,VENDOR,MODEL "/dev/$parent_dev" 2>/dev/null | head -n 1 || true)
+    disk_tran=$(printf '%s' "$disk_row" | sed -n 's/.*TRAN="\([^"]*\)".*/\1/p')
+    disk_vendor=$(printf '%s' "$disk_row" | sed -n 's/.*VENDOR="\([^"]*\)".*/\1/p')
+    disk_model=$(printf '%s' "$disk_row" | sed -n 's/.*MODEL="\([^"]*\)".*/\1/p')
+    NODE_DISK_MODEL=$(printf '%s %s' "$disk_vendor" "$disk_model" | sed -E 's/[[:space:]]+/ /g;s/^ //;s/ $//')
+    if [[ -n "$disk_tran" && -z "$NODE_DISK_MODEL" ]]; then
+      NODE_DISK_MODEL="${disk_tran^^}"
+    elif [[ -n "$disk_tran" && -n "$NODE_DISK_MODEL" ]]; then
+      NODE_DISK_MODEL="${disk_tran^^}: $NODE_DISK_MODEL"
+    fi
   fi
   if [[ -z "$is_rota" && -r "/sys/block/$parent_dev/queue/rotational" ]]; then
     is_rota=$(cat "/sys/block/$parent_dev/queue/rotational" 2>/dev/null | tr -d '[:space:]')
@@ -1377,6 +1438,27 @@ get_system_specs() {
     fi
   else
     NODE_UPTIME=$(uptime -p 2>/dev/null | sed 's/^up //' || uptime 2>/dev/null | awk -F'( |,|:)+' '{print $6"h "$7"m"}' || echo "N/A")
+  fi
+
+  local dmi_vendor="" dmi_product=""
+  [[ -r /sys/class/dmi/id/sys_vendor ]] && dmi_vendor=$(tr -d '\0\r\n' < /sys/class/dmi/id/sys_vendor 2>/dev/null | sed -E 's/[[:space:]]+/ /g;s/^ //;s/ $//')
+  [[ -r /sys/class/dmi/id/product_name ]] && dmi_product=$(tr -d '\0\r\n' < /sys/class/dmi/id/product_name 2>/dev/null | sed -E 's/[[:space:]]+/ /g;s/^ //;s/ $//')
+  case "$dmi_vendor" in ""|"None"|"To be filled by O.E.M."|"Default string") dmi_vendor="" ;; esac
+  case "$dmi_product" in ""|"None"|"To be filled by O.E.M."|"System Product Name"|"Default string") dmi_product="" ;; esac
+  if [[ -n "$dmi_vendor" && -n "$dmi_product" ]]; then
+    NODE_DMI="$dmi_vendor / $dmi_product"
+  elif [[ -n "$dmi_vendor" ]]; then
+    NODE_DMI="$dmi_vendor"
+  elif [[ -n "$dmi_product" ]]; then
+    NODE_DMI="$dmi_product"
+  fi
+
+  if [[ -r /proc/loadavg ]]; then
+    local l1 l2 l3
+    read -r l1 l2 l3 _ < /proc/loadavg 2>/dev/null || true
+    if [[ -n "$l1" && -n "$l2" && -n "$l3" ]]; then
+      NODE_LOADAVG="$l1 $l2 $l3"
+    fi
   fi
 
   # 3. OS & Kernel
@@ -1727,7 +1809,7 @@ format_unblock_status() {
   if [[ "$code" =~ ^(200|206|301|302|307|308|416)$ ]]; then
     echo "Yes"
   elif [[ "$code" == "000" ]]; then
-    echo "No (DPI Drop / Timeout)"
+    echo "No (Timeout)"
   elif [[ "$code" == "403" ]]; then
     echo "WAF / Challenge (403)"
   elif [[ "$code" == "451" ]]; then
@@ -1739,10 +1821,36 @@ format_unblock_status() {
   fi
 }
 
+probe_unblock_url() {
+  local url="$1"
+  local timing rc code conn tls
+  timing=$(curl_wrapper GET "$url" -o /dev/null -w "%{http_code} %{time_connect} %{time_appconnect}" -r 0-4095 2>/dev/null)
+  rc=$?
+  read -r code conn tls <<<"$timing"
+  code="${code:-000}"
+  [[ "$code" =~ ^0+$ ]] && code="000"
+  conn="${conn:-0}"
+  tls="${tls:-0}"
+  [[ ! "$conn" =~ ^[0-9]+(\.[0-9]+)?$ ]] && conn="0"
+  [[ ! "$tls" =~ ^[0-9]+(\.[0-9]+)?$ ]] && tls="0"
+
+  if [[ "$code" != "000" ]]; then
+    format_unblock_status "$code"
+  elif [[ "$rc" -eq 35 || "$rc" -eq 56 ]]; then
+    echo "No (DPI Reset)"
+  elif [[ "$rc" -eq 28 ]] && awk "BEGIN {exit !($conn > 0 && $tls == 0)}" 2>/dev/null; then
+    echo "No (DPI Drop)"
+  elif [[ "$rc" -eq 6 ]]; then
+    echo "No (DNS Error)"
+  elif [[ "$rc" -eq 7 ]]; then
+    echo "No (Conn Refused)"
+  else
+    echo "No (Timeout)"
+  fi
+}
+
 lookup_instagram() {
-  local code
-  code=$(curl_http_code "https://www.instagram.com")
-  format_unblock_status "$code"
+  probe_unblock_url "https://www.instagram.com"
 }
 
 lookup_discord() {
@@ -1752,21 +1860,15 @@ lookup_discord() {
 }
 
 lookup_twitter_x() {
-  local code
-  code=$(curl_http_code "https://x.com")
-  format_unblock_status "$code"
+  probe_unblock_url "https://x.com"
 }
 
 lookup_rutracker() {
-  local code
-  code=$(curl_http_code "https://rutracker.org")
-  format_unblock_status "$code"
+  probe_unblock_url "https://rutracker.org"
 }
 
 lookup_amnezia() {
-  local code
-  code=$(curl_http_code "https://amnezia.org")
-  format_unblock_status "$code"
+  probe_unblock_url "https://amnezia.org"
 }
 
 lookup_chatgpt() {
@@ -2192,7 +2294,15 @@ lookup_disney_plus() {
     --timeout 4 2>/dev/null)
   cc=$(jq -r '.extensions.sdk.session.location.countryCode // empty' <<<"$raw" 2>/dev/null)
   if [[ "$cc" =~ ^[A-Za-z]{2}$ ]]; then
-    echo "${cc^^}"
+    cc="${cc^^}"
+    case "$cc" in
+      RU|BY|CN|IR|KP|SY)
+        echo "No ($cc - Unsupported)"
+        ;;
+      *)
+        echo "$cc"
+        ;;
+    esac
   elif grep -qi "Forbidden location" <<<"$raw" 2>/dev/null; then
     echo "Block"
   else
@@ -2703,7 +2813,11 @@ iperf_stream_test() {
     local raw_out="$TMP_WORK_DIR/iperf_raw.log"
     : > "$raw_out"
 
-    timeout $((test_time + 4)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" --connect-timeout 2000 -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 > "$raw_out" 2>&1 &
+    if is_command_available "setsid"; then
+      setsid timeout -k 3 $((test_time + 4)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" --connect-timeout 2000 -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 > "$raw_out" 2>&1 &
+    else
+      timeout -k 3 $((test_time + 4)) "${stdbuf_cmd[@]}" iperf3 "${iperf_ver_flag[@]}" --connect-timeout 2000 -c "$target_host" -p "$target_port" "${mode_args[@]}" -t "$test_time" "${stream_args[@]}" -i 1 > "$raw_out" 2>&1 &
+    fi
     local iperf_pid=$!
     local start_sec=$SECONDS
     local last_line=0
@@ -2714,7 +2828,7 @@ iperf_stream_test() {
         if read -t 0.15 -n 1 user_key < /dev/tty 2>/dev/null; then
           if [[ -z "$user_key" || "$user_key" == $'\n' || "$user_key" == $'\r' || "$user_key" == " " || "$user_key" == "s" || "$user_key" == "S" ]]; then
             IPERF_SKIPPED=true
-            { kill -TERM "$iperf_pid" 2>/dev/null; sleep 0.05; kill -KILL "$iperf_pid" 2>/dev/null; wait "$iperf_pid" 2>/dev/null; } 2>/dev/null || true
+            { kill -TERM -- "-$iperf_pid" "$iperf_pid" 2>/dev/null; sleep 0.05; kill -KILL -- "-$iperf_pid" "$iperf_pid" 2>/dev/null; wait "$iperf_pid" 2>/dev/null; } 2>/dev/null || true
             iperf_pid=""
             break
           fi
@@ -3204,7 +3318,7 @@ assess_node_location() {
     fi
   done
   if [[ -n "$geoip_cc" && $geo_total -gt 0 && -n "${geo_counts[$geoip_cc]:-}" ]]; then
-    geoip_pct=$(( geo_counts[$geoip_cc] * 100 / geo_total ))
+    geoip_pct=$(awk -v c="${geo_counts[$geoip_cc]}" -v t="$geo_total" 'BEGIN { printf "%.0f", (c / t) * 100 }')
   fi
 
   # Determine top Western Services country
@@ -3451,7 +3565,7 @@ measure_ookla_speedtest() {
     fi
   fi
 
-  timeout 45 env HOME="$TMP_WORK_DIR" XDG_CONFIG_HOME="$TMP_WORK_DIR" "$st_bin" --accept-license --accept-gdpr -p no -f json > "$st_json" 2> "$st_err" &
+  timeout -k 3 45 env HOME="$TMP_WORK_DIR" XDG_CONFIG_HOME="$TMP_WORK_DIR" "$st_bin" --accept-license --accept-gdpr -p no -f json > "$st_json" 2> "$st_err" &
   local st_pid=$!
 
   local spinner=( "⠋" "⠙" "⠹" "⠸" "⠼" "⠴" "⠦" "⠧" "⠇" "⠏" )
@@ -4153,7 +4267,8 @@ print_geoblocked_table() {
 
 print_header() {
   local title="NodeCheck (RU Edition) - Node & Network Quality Auditor v${SCRIPT_VERSION}"
-  local title_len=${#title}
+  local title_len
+  title_len=$(vlen "$title")
   local pad=$(( 76 - title_len ))
   (( pad < 0 )) && pad=0
 
@@ -4192,7 +4307,11 @@ print_header() {
     fi
     echo -e " Локация / ASN:\t$(color "$COLOR_ASN" "$loc_str") — $NODE_ASN ($NODE_ORG)"
     echo -e " ОС и ядро:\t$(bold "$NODE_OS")"
-    echo -e " Платформа:\t$(bold "${NODE_VIRT^^}") | Аптайм: $(bold "$NODE_UPTIME")"
+    local platform_str="$(bold "${NODE_VIRT^^}")"
+    [[ -n "$NODE_DMI" ]] && platform_str+=" ($NODE_DMI)"
+    platform_str+=" | Аптайм: $(bold "$NODE_UPTIME")"
+    [[ -n "$NODE_LOADAVG" ]] && platform_str+=" | LA: $(bold "$NODE_LOADAVG")"
+    echo -e " Платформа:\t$platform_str"
     local cpu_desc
     cpu_desc="$(bold "$NODE_CPU_MODEL") (${NODE_CPU_CORES} vCPU)"
     local crypto_parts=()
@@ -4215,6 +4334,7 @@ print_header() {
     local disk_info="$NODE_DISK"
     local disk_extra=()
     [[ -n "$NODE_DISK_TYPE" && "$NODE_DISK_TYPE" != "N/A" ]] && disk_extra+=("$NODE_DISK_TYPE")
+    [[ -n "$NODE_DISK_MODEL" ]] && disk_extra+=("$NODE_DISK_MODEL")
     if [[ -n "$NODE_DISK_IO" && "$NODE_DISK_IO" != "N/A" ]]; then
       disk_extra+=("I/O: $NODE_DISK_IO")
     fi
@@ -4422,6 +4542,29 @@ print_ru_local_table() {
   printf "\n"
 }
 
+print_final_summary() {
+  bold "Итоговая сводка (NodeCheck)"; printf "\n"
+  {
+    echo -e " IP и репутация:\t$(bold "${NODE_TYPE:-N/A}") | $(color "$NODE_IP_NATIVE_COLOR" "${NODE_IP_NATIVE:-N/A}") | РКН: $(color "$NODE_RKN_COLOR" "${NODE_RKN_STATUS:-N/A}") | DNSBL: $(color "$NODE_DNSBL_COLOR" "${NODE_DNSBL_STATUS:-N/A}")"
+    echo -e " Риск / Captcha:\t$(color "$NODE_RISK_COLOR" "${NODE_RISK:-N/A}") | Google Captcha: $(color "$NODE_CAPTCHA_COLOR" "${NODE_CAPTCHA_STATUS:-N/A}")"
+    local disk_summary
+    disk_summary="$(bold "${NODE_DISK_TYPE:-N/A}")"
+    if [[ -n "${NODE_DISK_IO:-}" && "$NODE_DISK_IO" != "N/A" ]]; then
+      disk_summary+=" (${NODE_DISK_IO})"
+    fi
+    echo -e " Железо / Стек:\tSteal: $(color "$NODE_CPU_STEAL_COLOR" "${NODE_CPU_STEAL:-N/A}") | Диск: ${disk_summary} | BBR: $(format_value "${NODE_BBR_STATUS:-N/A}")"
+    local net_summary="Port 25: $(format_value "${NODE_PORT25_STATUS:-N/A}")"
+    if [[ -n "$NODE_NEAREST_RU_CITY" && "$NODE_NEAREST_RU_PING" != "N/A" ]]; then
+      net_summary+=" | Ближайший РФ: $(bold "$NODE_NEAREST_RU_CITY") (${NODE_NEAREST_RU_PING})"
+    fi
+    if [[ -n "$NODE_UPLINK_CITY" && "$NODE_UPLINK_PING" != "N/A" ]]; then
+      net_summary+=" | Ookla: $(bold "$NODE_UPLINK_CITY") (${NODE_UPLINK_PING})"
+    fi
+    echo -e " Связность:\t$net_summary"
+  } | format_table
+  printf "\n"
+}
+
 main() {
   MAIN_PID=$$
   export MAIN_PID
@@ -4504,6 +4647,8 @@ main() {
 
   # 7. Multi-Region Connectivity & iPerf3 Speedtest (Russian Federation)
   measure_ru_iperf
+
+  print_final_summary
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" || -z "${BASH_SOURCE[0]}" ]]; then
